@@ -21,6 +21,9 @@ fn find_server_script() -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
 
     if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("sutram").join("sutramServer").join("server.js"));
+        candidates.push(cwd.join("Sutram-Eco-System").join("sutramServer").join("server.js"));
+        candidates.push(cwd.join("app").join("sutramServer").join("server.js"));
         candidates.push(cwd.join("sutramServer").join("server.js"));
         candidates.push(cwd.join("server").join("server.js"));
         candidates.push(cwd.join("..").join("sutramServer").join("server.js"));
@@ -28,14 +31,20 @@ fn find_server_script() -> Option<PathBuf> {
 
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
-            // Portable next to binary
+            // Portable root layout: SutramPortable/Sutram.exe beside SutramPortable/sutram/
+            candidates.push(exe_dir.join("sutram").join("sutramServer").join("server.js"));
+            candidates.push(exe_dir.join("Sutram-Eco-System").join("sutramServer").join("server.js"));
+            candidates.push(exe_dir.join("app").join("sutramServer").join("server.js"));
+            // Portable inside sutram/: Sutram.exe next to sutramServer/
             candidates.push(exe_dir.join("sutramServer").join("server.js"));
             candidates.push(exe_dir.join("server").join("server.js"));
             // macOS .app/Contents/Resources
             candidates.push(exe_dir.join("../Resources/sutramServer/server.js"));
-            // macOS .app placed inside sutram/ portable folder
-            candidates.push(exe_dir.join("../../../sutramServer/server.js"));
-            // Dev binary inside src-tauri/target/debug/
+            // macOS .app placed OUTSIDE sutram/: SutramPortable/Sutram.app beside sutram/
+            candidates.push(exe_dir.join("../../../sutram/sutramServer/server.js"));
+            candidates.push(exe_dir.join("../../../Sutram-Eco-System/sutramServer/server.js"));
+            candidates.push(exe_dir.join("../../../app/sutramServer/server.js"));
+            // macOS .app placed INSIDE sutram/ or dev binary inside src-tauri/target/debug/
             candidates.push(exe_dir.join("../../../sutramServer/server.js"));
             candidates.push(exe_dir.join("../../sutramServer/server.js"));
             // Release .app inside src-tauri/target/release/bundle/macos/Sutram.app/Contents/MacOS/
@@ -57,9 +66,19 @@ fn find_node_binary(server_dir: &Path) -> String {
 
     if let Some(sutram_root) = server_dir.parent() {
         #[cfg(target_os = "windows")]
-        candidates.push(sutram_root.join("runtime").join("node.exe"));
+        {
+            candidates.push(sutram_root.join("runtime").join("node.exe"));
+            if let Some(portable_root) = sutram_root.parent() {
+                candidates.push(portable_root.join("runtime").join("node.exe"));
+            }
+        }
         #[cfg(not(target_os = "windows"))]
-        candidates.push(sutram_root.join("runtime").join("node"));
+        {
+            candidates.push(sutram_root.join("runtime").join("node"));
+            if let Some(portable_root) = sutram_root.parent() {
+                candidates.push(portable_root.join("runtime").join("node"));
+            }
+        }
     }
 
     #[cfg(not(target_os = "windows"))]

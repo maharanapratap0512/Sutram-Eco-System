@@ -189,9 +189,10 @@ For a client or brother's PC that doesn't have Git, Angular, or Rust:
 
 ```text
 SutramPortable/
-├── SutramData/           # Databases & backups (kept safe outside)
-└── sutram/
-    ├── Sutram.exe        # (Windows) or Sutram Dynamic ERP.app (macOS)
+├── Sutram.exe            # (Windows) or Sutram Dynamic ERP.app (macOS) — 1-click launch!
+├── SutramData/           # Databases & backups (100% safe outside code folder)
+├── runtime/              # (Optional) Portable node.exe / node binary
+└── sutram/               # Pure code folder (can be replaced wholesale anytime!)
     ├── start-portable.bat / .sh
     ├── dist/             # Built UI (~3.8 MB)
     ├── sutramServer/     # Backend code
