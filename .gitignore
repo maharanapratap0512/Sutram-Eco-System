@@ -20,6 +20,8 @@ data/
 SutramData/
 backups/
 releases/
+release/
+.runtime-cache/
 temp_uploads/
 temp_updates/
 *.db
@@ -28,6 +30,8 @@ temp_updates/
 *.sqlite
 *.sqlite3
 *.zip
+*.dmg
+*.exe
 
 # OS & Editor clutter
 .DS_Store

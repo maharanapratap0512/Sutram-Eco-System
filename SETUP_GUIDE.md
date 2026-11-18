@@ -183,25 +183,47 @@ This creates a ~1.5 MB ZIP at **`releases/sutram-update-v*.zip`** containing ONL
 
 ---
 
-## 7. Portable Pendrive Setup (For Client PCs)
+## 7. Distribution Builds: Direct Portable vs Full Setup Installer
 
-For a client or brother's PC that doesn't have Git, Angular, or Rust:
+Sutram supports **2 distribution modes** using the exact same folder layout (so `SutramData/` stays safe and OTA updates work identically in both):
 
 ```text
-SutramPortable/
-├── Sutram.exe            # (Windows) or Sutram Dynamic ERP.app (macOS) — 1-click launch!
-├── SutramData/           # Databases & backups (100% safe outside code folder)
-├── runtime/              # (Optional) Portable node.exe / node binary
-└── sutram/               # Pure code folder (can be replaced wholesale anytime!)
-    ├── start-portable.bat / .sh
-    ├── dist/             # Built UI (~3.8 MB)
-    ├── sutramServer/     # Backend code
-    ├── packages/         # Sutram packages
-    ├── node_modules/     # Installed once on target OS (Windows or macOS)
+<InstallOrPortableFolder>/
+├── Sutram.exe               # (Windows) or Sutram Dynamic ERP.app (macOS)
+├── SutramData/              # Databases & backups (NEVER overwritten on upgrade/uninstall!)
+│   └── projects/
+└── sutram/                  # App code (updated cleanly by OTA updates or re-install)
+    ├── dist/                # Built Angular UI
+    ├── sutramServer/        # Backend server
+    ├── packages/            # Sutram packages
+    ├── node_modules/        # Production deps + FAT32/ZIP-safe shims
+    ├── runtime/             # Portable Node.js v20 binary (auto-used if compatible Node is missing)
     └── package.json
 ```
 
-> **OS Note**: `node_modules/better-sqlite3` contains OS-specific native binaries. Run `npm install --legacy-peer-deps` once on Windows when preparing a Windows pendrive, and once on macOS when preparing a macOS pendrive.
+### Step-by-Step Build Commands (Modular)
+
+| Mode / Step | Command (run inside `sutram/`) | Output |
+| :--- | :--- | :--- |
+| **Mode 1 — Direct Portable Launcher** *(drop next to `sutram/` & double-click!)* | `npm run build:portable` | **Windows**: `releases/Sutram.exe` (~6 MB)<br>**macOS**: `releases/Sutram Dynamic ERP.app` (~8 MB) |
+| **Mode 1 (macOS Launcher `.dmg`)** | `npm run build:portable:dmg` | `releases/Sutram-Launcher-v*-mac-*.dmg` |
+| **Mode 2 — Prepare Full Staging Bundle** *(for Installer)* | `npm run prepare:bundle` | `releases/staging/` (UI + Tauri + server + packages + prod `node_modules` + private Node v20 runtime) |
+| **Mode 2 — Build Windows Setup Wizard (`.exe`)** | `npm run build:installer` | **Windows**: `releases/Sutram-Setup-v*-win-x64.exe` *(requires Inno Setup 6)* |
+| **All-in-One (Mode 1 + Mode 2)** | `npm run build:all` | Direct Portable Launcher + Full Windows Setup Wizard |
+| *(Optional)* Full Pendrive ZIP/DMG | `npm run build:portable:full` | Single archive with everything bundled for a brand-new PC |
+| Fast re-stage *(skip UI & Rust rebuild)* | `npm run prepare:bundle:fast` | Refreshes `releases/staging/` in ~2 seconds |
+| Sirf Angular UI build (`dist/`) | `npm run build:ui` | `dist/` |
+
+### How Windows Full Setup Installer (`Sutram-Setup-*.exe`) Works
+1. **Asks Installation Folder Path** (defaults to `C:\Sutram` — user can browse to `D:\Sutram`, etc.; avoids `Program Files` UAC issues).
+2. **Automatic Node.js Check**:
+   - Silently runs `node -v` on the client PC.
+   - If a compatible **Node.js v20.x** (matching `better-sqlite3` ABI) is already installed, uses system Node.js (unless user checks *"Force install private runtime"*).
+   - If Node.js is **not installed** OR is an **incompatible major version** (e.g. v18/v22), automatically extracts the bundled `sutram\runtime\node.exe` — **100% offline, zero crashes**.
+3. **Database Safety**: Creates `{app}\SutramData\` only if missing, never overwrites existing databases on upgrade, and preserves `SutramData\` on uninstall.
+
+> **Prerequisite for building Windows Installer locally on Windows**: Install free **Inno Setup 6** (`winget install JRSoftware.InnoSetup`).
+> **Building Windows Portable + Installer from macOS**: Push to GitHub $\rightarrow$ open **Actions** $\rightarrow$ **Build Windows Desktop Releases** $\rightarrow$ click **Run workflow** $\rightarrow$ choose `both`, `portable`, `installer`, or `exe-only`!
 
 ---
 
@@ -214,10 +236,13 @@ SutramPortable/
 | Start dev backend (port 3300) | `npm run server:dev` |
 | Start dev UI (port 4300) | `npm run ui` |
 | Start Tauri desktop in dev mode | `npx tauri dev` |
-| Build production UI (`dist/`) | `npm run ui:build` |
+| Build production UI (`dist/`) | `npm run build:ui` |
 | Run production single-port (3300) | `npm start` |
-| Build native desktop `.exe` / `.dmg` | `npx tauri build` |
-| Build lightweight client `update.zip` | `npm run make-update` |
+| Prepare release staging bundle | `npm run prepare:bundle` |
+| Build Direct Portable (`.zip` / `.dmg`) | `npm run build:portable` |
+| Build Windows Setup Wizard (`.exe`) | `npm run build:installer` |
+| Build everything in one command | `npm run build:all` |
+| Build lightweight client OTA `update.zip` | `npm run make-update` |
 
 ---
 

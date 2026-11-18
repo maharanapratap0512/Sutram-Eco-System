@@ -121,12 +121,12 @@ fn start_backend_if_needed() -> Option<Child> {
         let child = cmd.spawn();
 
         if let Ok(proc) = child {
-            // Wait briefly for server to bind port 3300
-            for _ in 0..15 {
+            // Wait for server to bind port 3300 (up to 7.5s for first cold boot on slower disks)
+            for _ in 0..30 {
                 if is_server_running() {
                     break;
                 }
-                std::thread::sleep(Duration::from_millis(200));
+                std::thread::sleep(Duration::from_millis(250));
             }
             return Some(proc);
         }
