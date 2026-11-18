@@ -1,0 +1,22 @@
+{
+  "name": "sutramlan",
+  "version": "1.0.0",
+  "description": "Zero-Config P2P LAN Peer Discovery, Project Advertising & Secure Collaboration for Sutram Ecosystem",
+  "main": "index.js",
+  "keywords": [
+    "sutram",
+    "lan",
+    "p2p",
+    "discovery",
+    "mdns",
+    "broadcast",
+    "zeroconf",
+    "sutramengine",
+    "sutramcore"
+  ],
+  "author": "Google DeepMind & Nastmoha Team",
+  "license": "ISC",
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

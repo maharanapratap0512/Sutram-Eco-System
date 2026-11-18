@@ -1,0 +1,43 @@
+{
+  "name": "sutram-erp-platform",
+  "version": "1.0.0",
+  "description": "Sutram Dynamic ERP Platform — Standalone Universal Schema-Oriented Engine & Excel Studio",
+  "private": true,
+  "scripts": {
+    "server": "node sutramServer/server.js",
+    "server:dev": "nodemon sutramServer/server.js",
+    "ui": "cd sutramUI && ng serve --port 4300 --proxy-config proxy.conf.json",
+    "ui:build": "cd sutramUI && ng build",
+    "make-update": "node scripts/make-update.js",
+    "start": "node sutramServer/server.js",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "keywords": [
+    "sutram",
+    "erp",
+    "schema-driven",
+    "excel-studio",
+    "spreadsheet",
+    "universal-orm"
+  ],
+  "author": "Antigravity & Sutram Development Team",
+  "license": "ISC",
+  "dependencies": {
+    "better-sqlite3": "^12.2.0",
+    "cors": "^2.8.5",
+    "exceljs": "^4.4.0",
+    "express": "^4.18.2",
+    "multer": "^1.4.5-lts.1",
+    "sutramcore": "file:./packages/sutramcore",
+    "sutramengine": "file:./packages/sutramEngine",
+    "sutramexcel": "file:./packages/sutramExcel",
+    "sutramlan": "file:./packages/sutramLan",
+    "sutramvision": "file:./packages/sutramVision"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.5",
+    "nodemon": "^3.1.0"
+  }
+}

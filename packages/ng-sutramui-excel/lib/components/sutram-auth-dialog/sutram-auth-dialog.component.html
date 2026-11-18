@@ -1,0 +1,74 @@
+<p-dialog
+  [(visible)]="visible"
+  [modal]="true"
+  [closable]="canDismiss"
+  [dismissableMask]="canDismiss"
+  [draggable]="false"
+  [resizable]="false"
+  [style]="{ width: '92vw', maxWidth: '420px' }"
+  styleClass="sutram-auth-dialog"
+  [header]="title"
+  (onHide)="close()">
+
+  <div class="auth-dialog-body">
+    <!-- Error Alert Box -->
+    <div class="auth-error-box" *ngIf="errorMessage">
+      <i class="pi pi-exclamation-triangle"></i>
+      <span>{{ errorMessage }}</span>
+    </div>
+
+    <!-- Form Fields (Full Width) -->
+    <form (ngSubmit)="onSubmit()" class="auth-form">
+      <div class="auth-field">
+        <label for="authUsername">Username</label>
+        <span class="p-input-icon-left w-full input-full-span">
+          <i class="pi pi-user"></i>
+          <input
+            id="authUsername"
+            type="text"
+            pInputText
+            class="p-inputtext-sm w-full font-mono auth-input"
+            [(ngModel)]="username"
+            name="username"
+            placeholder="e.g. admin or author"
+            autofocus
+            required />
+        </span>
+      </div>
+
+      <div class="auth-field">
+        <label for="authPassword">Password</label>
+        <p-password
+          id="authPassword"
+          [(ngModel)]="password"
+          name="password"
+          [toggleMask]="true"
+          [feedback]="false"
+          placeholder="••••••••"
+          styleClass="w-full auth-password-wrap"
+          inputStyleClass="w-full p-inputtext-sm font-mono auth-input"
+          required>
+        </p-password>
+      </div>
+
+      <div class="auth-actions">
+        <button
+          *ngIf="canDismiss"
+          pButton
+          type="button"
+          class="p-button-text p-button-secondary p-button-sm"
+          label="Cancel"
+          (click)="close()">
+        </button>
+        <button
+          pButton
+          type="submit"
+          class="p-button-primary p-button-sm auth-submit-btn"
+          icon="pi pi-sign-in"
+          [loading]="isLoading"
+          label="Sign In">
+        </button>
+      </div>
+    </form>
+  </div>
+</p-dialog>

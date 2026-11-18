@@ -1,0 +1,439 @@
+<!-- sutram-header-scanner.component.html -->
+<p-dialog [(visible)]="visible"
+          [modal]="true"
+          [style]="{ width: '920px', maxWidth: '96vw' }"
+          [closable]="true"
+          styleClass="sutram-open-file-dialog"
+          (onHide)="close()">
+
+  <!-- Dialog Header -->
+  <ng-template pTemplate="header">
+    <div class="scanner-dialog-header">
+      <div class="dialog-title-group">
+        <i class="pi pi-folder-open text-primary fs-5"></i>
+        <span class="dialog-title">फ़ाइल और स्थानीय शीट्स (Open File & Saved Sheets)</span>
+      </div>
+
+      <!-- Active File Info in Header -->
+      <div *ngIf="fileName" class="active-file-header-badge">
+        <span class="file-name-chip" [title]="fileName">
+          <i class="pi pi-file-excel text-success me-1"></i>
+          <strong>{{ fileName }}</strong>
+          <small *ngIf="fileSize" class="file-size-lbl">({{ formatFileSize(fileSize) }})</small>
+        </span>
+        <button pButton
+                type="button"
+                label="फ़ाइल बदलें"
+                icon="pi pi-sync"
+                class="p-button-outlined p-button-secondary p-button-xs"
+                (click)="triggerFileInput.emit()"
+                title="अन्य फ़ाइल चुनें">
+        </button>
+      </div>
+    </div>
+  </ng-template>
+
+  <!-- Modal Content Container: 2-Column Split -->
+  <div class="sutram-open-modal-container">
+
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <!-- LEFT SIDEBAR: Saved Local Sheets List                   -->
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <div class="saved-sheets-sidebar">
+      <div class="saved-sheets-header">
+        <div class="saved-title-wrap">
+          <i class="pi pi-save text-primary"></i>
+          <span class="saved-title">सहेजी गई शीट्स</span>
+        </div>
+        <p-tag [value]="savedSheets.length + ''" severity="info" [rounded]="true"></p-tag>
+      </div>
+
+      <div class="saved-sheets-list">
+        <div *ngIf="savedSheets.length === 0" class="empty-saved-sheets">
+          <i class="pi pi-inbox"></i>
+          <span>कोई सहेजी गई शीट नहीं है</span>
+        </div>
+
+        <div *ngFor="let s of savedSheets"
+             class="saved-sheet-card"
+             (click)="onSelectSavedSheet(s.sheetId)"
+             [title]="'क्लिक करके खोलें: ' + s.title">
+          <div class="sheet-info-col">
+            <div class="sheet-title-row">
+              <i class="pi pi-file-excel text-success"></i>
+              <span class="sheet-title-text">{{ s.title }}</span>
+            </div>
+            <div class="sheet-meta-row">
+              <span class="sheet-meta-badge">{{ s.rowCount }} पंक्तियाँ</span>
+              <span *ngIf="s.savedAt" class="sheet-meta-time">• {{ s.savedAt }}</span>
+            </div>
+          </div>
+
+          <!-- Delete Action with Inline Confirmation -->
+          <div class="sheet-actions-col">
+            <ng-container *ngIf="deleteConfirmSheetId === s.sheetId; else normalTrashBtn">
+              <div class="delete-confirm-box" (click)="$event.stopPropagation()">
+                <small class="confirm-lbl">हटाएं?</small>
+                <button type="button" class="confirm-yes-btn" (click)="confirmDeleteSavedSheet(s.sheetId, $event)" title="हाँ, हटाएं">
+                  <i class="pi pi-check"></i>
+                </button>
+                <button type="button" class="confirm-no-btn" (click)="cancelDeleteSavedSheet($event)" title="रद्द करें">
+                  <i class="pi pi-times"></i>
+                </button>
+              </div>
+            </ng-container>
+            <ng-template #normalTrashBtn>
+              <button type="button"
+                      class="sheet-delete-btn"
+                      (click)="promptDeleteSavedSheet(s.sheetId, $event)"
+                      title="इस शीट को हटाएं">
+                <i class="pi pi-trash"></i>
+              </button>
+            </ng-template>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <!-- RIGHT MAIN PANE: Drag & Drop Dropzone OR Matcher Flow  -->
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <div class="open-file-main-pane">
+
+      <!-- STATE A: No File Loaded Yet -> Modern Drag & Drop Zone -->
+      <ng-container *ngIf="!fileName; else fileLoadedTpl">
+        <div class="sutram-dropzone"
+             [class.is-dragover]="isDragOver"
+             (dragover)="onDragOver($event)"
+             (dragleave)="onDragLeave($event)"
+             (drop)="onDrop($event)"
+             (click)="triggerFileInput.emit()">
+          
+          <div class="dropzone-icon-circle">
+            <i class="pi pi-cloud-upload"></i>
+          </div>
+
+          <h5 class="dropzone-title">एक्सेल फ़ाइल आयात करें (Import Excel)</h5>
+          <p class="dropzone-subtitle">
+            कंप्यूटर से कोई भी .xlsx, .xls या .csv फ़ाइल यहाँ खींचें (Drag & Drop) या नीचे क्लिक करें।
+          </p>
+
+          <button pButton
+                  type="button"
+                  label="कंप्यूटर से फ़ाइल चुनें (Browse File)"
+                  icon="pi pi-folder-open"
+                  class="p-button-primary p-button-sm px-3"
+                  (click)="$event.stopPropagation(); triggerFileInput.emit()">
+          </button>
+
+          <div class="supported-formats-pills">
+            <span class="format-pill">.XLSX</span>
+            <span class="format-pill">.XLS</span>
+            <span class="format-pill">.CSV</span>
+          </div>
+        </div>
+      </ng-container>
+
+      <!-- STATE B: File Loaded -> Multi-Sheet Toolbar & Dual Modes -->
+      <ng-template #fileLoadedTpl>
+        <div class="file-loaded-content">
+
+          <!-- 1. Workbook Control Bar (Sheet Selector & Header Row Selector) -->
+          <div class="workbook-control-bar">
+            <!-- Multi-Sheet Selector -->
+            <div *ngIf="sheetNames.length > 1" class="wb-control-item">
+              <label class="wb-control-label">शीट चुनें:</label>
+              <p-dropdown [options]="sheetDropdownOptions"
+                          [ngModel]="currentSheetName"
+                          (onChange)="onSheetSelect($event.value)"
+                          styleClass="p-dropdown-sm wb-dropdown">
+              </p-dropdown>
+            </div>
+
+            <!-- Header Row Selector -->
+            <div class="wb-control-item">
+              <label class="wb-control-label">हेडर पंक्ति:</label>
+              <p-dropdown [options]="headerRowOptions"
+                          [ngModel]="headerRowIndex"
+                          (onChange)="onHeaderRowSelect($event.value)"
+                          styleClass="p-dropdown-sm wb-dropdown"
+                          title="जिस पंक्ति में कॉलम के नाम हैं उसे चुनें">
+              </p-dropdown>
+            </div>
+
+            <!-- Detected Rows Count -->
+            <div class="wb-control-item wb-stat-item">
+              <span class="stat-count-badge">{{ totalRows }} कुल पंक्तियाँ</span>
+            </div>
+          </div>
+
+          <!-- 2. Mode Selector Segmented Tabs -->
+          <div class="mode-tabs-bar">
+            <button type="button"
+                    class="mode-tab-btn"
+                    [class.active]="activeMode === 'matcher'"
+                    (click)="activeMode = 'matcher'">
+              <i class="pi pi-database me-1"></i>
+              <span>डेटाबेस फॉर्मेट मैचर (Database Matcher)</span>
+              <span class="mode-tab-tag">Schema & Sync</span>
+            </button>
+
+            <button type="button"
+                    class="mode-tab-btn"
+                    [class.active]="activeMode === 'normal'"
+                    (click)="activeMode = 'normal'">
+              <i class="pi pi-file-excel me-1"></i>
+              <span>सामान्य शीट (Normal Sheet)</span>
+              <span class="mode-tab-tag mode-tag-green">Direct Load</span>
+            </button>
+          </div>
+
+          <!-- ─────────────────────────────────────────────────── -->
+          <!-- MODE 1: NORMAL SHEET VIEW                           -->
+          <!-- ─────────────────────────────────────────────────── -->
+          <div *ngIf="activeMode === 'normal'" class="normal-mode-view">
+            <div class="normal-mode-card">
+              <div class="normal-card-header">
+                <div class="normal-card-icon">
+                  <i class="pi pi-file-excel text-success"></i>
+                </div>
+                <div>
+                  <h6 class="normal-card-title">सामान्य शीट में सीधे खोलें (As-Is Load)</h6>
+                  <p class="normal-card-desc">बिना किसी डेटाबेस मैपिंग या बाधा के एक्सेल फ़ाइल को बिल्कुल जैसा है (As-Is) तुरंत नई शीट में खोलें।</p>
+                </div>
+              </div>
+
+              <div class="sheet-name-input-group">
+                <label class="input-lbl">शीट का नाम (Sheet Name):</label>
+                <input type="text"
+                       class="p-inputtext p-inputtext-sm"
+                       [(ngModel)]="normalSheetCustomName"
+                       [placeholder]="currentSheetName || fileName"
+                       (keyup.enter)="confirmDirectNormal()">
+              </div>
+
+              <div class="normal-action-row">
+                <button pButton
+                        type="button"
+                        label="नई सामान्य शीट में खोलें (Open Sheet)"
+                        icon="pi pi-check"
+                        class="p-button-success"
+                        (click)="confirmDirectNormal()">
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- ─────────────────────────────────────────────────── -->
+          <!-- MODE 2: DATABASE FORMAT MATCHER VIEW                -->
+          <!-- ─────────────────────────────────────────────────── -->
+          <div *ngIf="activeMode === 'matcher'" class="matcher-mode-view">
+            
+            <!-- Target Table Search Dropdown -->
+            <div class="target-table-row">
+              <label class="target-table-label">
+                <i class="pi pi-database text-primary me-1"></i>
+                <span>टारगेट डेटाबेस तालिका चुनें (Select Target Table):</span>
+              </label>
+              <p-dropdown [options]="tableSelectOptions"
+                          [(ngModel)]="selectedTable"
+                          [filter]="true"
+                          filterBy="label,value"
+                          filterPlaceholder="तालिका का नाम खोजें..."
+                          placeholder="तालिका चुनें..."
+                          styleClass="w-100 target-table-dropdown"
+                          (onChange)="onTableChange($event.value)">
+              </p-dropdown>
+            </div>
+
+            <!-- Loading Spinner for Schema -->
+            <div *ngIf="isTableConfigLoading" class="schema-loading-state">
+              <i class="pi pi-spin pi-spinner text-primary fs-2"></i>
+              <span class="loading-lbl">तालिका स्कीमा और संदर्भ डेटा लोड हो रहा है...</span>
+            </div>
+
+            <!-- Mapping Dashboard (When Table is Selected) -->
+            <div *ngIf="!isTableConfigLoading && report && selectedTable" class="matcher-dashboard">
+              
+              <!-- Quick Filter Pills & Actions Toolbar -->
+              <div class="matcher-filter-toolbar">
+                <div class="filter-pills-wrap">
+                  <button type="button"
+                          class="filter-pill"
+                          [class.active]="filterTab === 'all'"
+                          (click)="filterTab = 'all'">
+                    सभी ({{ totalColsCount }})
+                  </button>
+                  <button type="button"
+                          class="filter-pill pill-success"
+                          [class.active]="filterTab === 'mapped'"
+                          (click)="filterTab = 'mapped'">
+                    ✓ मैप्ड ({{ mappedCount }})
+                  </button>
+                  <button type="button"
+                          class="filter-pill pill-warning"
+                          [class.active]="filterTab === 'unmatched'"
+                          (click)="filterTab = 'unmatched'">
+                    ⚠️ अनमैप्ड ({{ unmatchedCount }})
+                  </button>
+                </div>
+
+                <div class="search-and-actions">
+                  <div class="filter-search-box">
+                    <i class="pi pi-search search-icon"></i>
+                    <input type="text"
+                           class="p-inputtext p-inputtext-sm search-input"
+                           [(ngModel)]="searchQuery"
+                           placeholder="कॉलम खोजें...">
+                  </div>
+
+                  <button pButton
+                          type="button"
+                          icon="pi pi-bolt"
+                          label="ऑटो-मैच"
+                          class="p-button-outlined p-button-sm p-button-primary"
+                          (click)="autoMapAll()"
+                          title="स्वतः हेडर्स मैच करें">
+                  </button>
+
+                  <button pButton
+                          type="button"
+                          icon="pi pi-times"
+                          class="p-button-outlined p-button-sm p-button-secondary"
+                          (click)="clearAllMappings()"
+                          title="सभी मैपिंग रीसेट करें">
+                  </button>
+                </div>
+              </div>
+
+              <!-- Missing Required Fields Card with Optional Default Value Inputs -->
+              <div *ngIf="report.missingMandatory.length > 0" class="missing-mandatory-card">
+                <div class="missing-mandatory-header">
+                  <i class="pi pi-exclamation-triangle text-danger me-1"></i>
+                  <strong>अनिवार्य कॉलम्स छूट गए हैं (Missing Mandatory Fields)</strong>
+                  <span class="missing-count-badge">{{ report.missingMandatory.length }}</span>
+                </div>
+                <p class="missing-mandatory-desc">
+                  डेटाबेस में ये फ़ील्ड अनिवार्य हैं लेकिन एक्सेल में नहीं मिले। आप चाहें तो नीचे उनके लिए डिफ़ॉल्ट मान (Default Value) भर सकते हैं:
+                </p>
+                <div class="missing-fields-grid">
+                  <div *ngFor="let req of report.missingMandatory" class="missing-field-row">
+                    <span class="missing-field-tag">{{ req.name }}{{ req.col_name && req.col_name !== req.name ? ' (' + req.col_name + ')' : '' }} *</span>
+                    <input type="text"
+                           class="p-inputtext p-inputtext-sm default-val-input"
+                           [(ngModel)]="defaultValues[req.name]"
+                           placeholder="डिफ़ॉल्ट मान (उदा. 0 या आज की तारीख)...">
+                  </div>
+                </div>
+              </div>
+
+              <!-- Column Mapping Scrollable Table -->
+              <div class="mapping-table-wrap">
+                <table class="sutram-mapping-table">
+                  <thead>
+                    <tr>
+                      <th style="width: 44%;">एक्सेल कॉलम व नमूना मान (Excel Header & Samples)</th>
+                      <th style="width: 16%; text-align: center;">मैच स्थिति</th>
+                      <th style="width: 40%;">डेटाबेस फ़ील्ड (Target Field)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr *ngFor="let m of filteredMatches" [class.unmatched-row]="!m.targetColKey">
+                      <!-- Excel Column Info + Sample Values -->
+                      <td>
+                        <div class="col-meta-box">
+                          <div class="col-name-label">
+                            <span class="sheet-col-header">{{ m.sheetHeader || '(खाली / Blank)' }}</span>
+                            <span class="sheet-col-idx">Col {{ m.sheetColIndex + 1 }}</span>
+                          </div>
+                          <!-- Live Sample Values Preview -->
+                          <div *ngIf="m.sampleValues && m.sampleValues.length > 0" class="sample-values-row">
+                            <span class="sample-lbl">नमूना:</span>
+                            <span *ngFor="let sample of m.sampleValues" class="sample-pill" [title]="sample">
+                              {{ sample }}
+                            </span>
+                          </div>
+                        </div>
+                      </td>
+
+                      <!-- Match Status Badge -->
+                      <td class="text-center align-middle">
+                        <span *ngIf="m.status === 'matched' && m.confidence >= 0.95" class="match-badge badge-exact" title="Exact match">
+                          ✓ Exact
+                        </span>
+                        <span *ngIf="m.status === 'matched' && m.confidence < 0.95" class="match-badge badge-fuzzy" title="Fuzzy / Alias match">
+                          ≈ {{ Math.round((m.confidence || 0) * 100) }}%
+                        </span>
+                        <span *ngIf="m.status === 'manual'" class="match-badge badge-manual" title="Manually mapped">
+                          ✎ चुना
+                        </span>
+                        <span *ngIf="!m.targetColKey || m.status === 'unmatched'" class="match-badge badge-unmatched" title="No match found">
+                          - छूटा
+                        </span>
+                      </td>
+
+                      <!-- Target Field Dropdown -->
+                      <td class="align-middle">
+                        <p-dropdown [options]="columnSelectOptions"
+                                    [ngModel]="m.targetColKey"
+                                    [showClear]="true"
+                                    [filter]="true"
+                                    filterPlaceholder="फ़ील्ड खोजें..."
+                                    placeholder="(छोड़ दें / Skip)"
+                                    styleClass="w-100 p-dropdown-sm target-field-dropdown"
+                                    (onChange)="onTargetColumnChange(m, $event.value)">
+                        </p-dropdown>
+                      </td>
+                    </tr>
+
+                    <tr *ngIf="filteredMatches.length === 0">
+                      <td colspan="3" class="empty-matches-row">
+                        <span>कोई कॉलम नहीं मिला</span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <!-- Confirm Mapped Load Button -->
+              <div class="confirm-mapping-footer">
+                <button pButton
+                        type="button"
+                        label="तालिका में लोड करें (Open & Map to Table)"
+                        icon="pi pi-check"
+                        class="p-button-primary w-100 py-2 fw-semibold"
+                        [disabled]="!selectedTable || isTableConfigLoading"
+                        (click)="confirmMappedToTable()">
+                </button>
+              </div>
+
+            </div>
+
+            <!-- Prompt if table not selected yet -->
+            <div *ngIf="!isTableConfigLoading && !report && !selectedTable" class="select-table-prompt">
+              <i class="pi pi-info-circle text-muted mb-1"></i>
+              <span>कृपया ऊपर दिए गए सर्च ड्रॉपडाउन से डेटाबेस तालिका चुनें।</span>
+            </div>
+
+          </div>
+
+        </div>
+      </ng-template>
+
+    </div>
+
+  </div>
+
+  <!-- Dialog Footer -->
+  <ng-template pTemplate="footer">
+    <div class="dialog-footer-row">
+      <button pButton
+              label="रद्द करें (Cancel)"
+              icon="pi pi-times"
+              class="p-button-text p-button-secondary"
+              (click)="close()">
+      </button>
+    </div>
+  </ng-template>
+
+</p-dialog>

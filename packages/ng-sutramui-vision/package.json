@@ -1,0 +1,25 @@
+{
+  "name": "ng-sutramui-vision",
+  "version": "1.0.0-beta.1",
+  "description": "Visual Document & Handwriting OCR AI UI component library for Sutram Eco-System. Tabular registers (Aawak-Jawak), handwritten invoices, multi-key profile vault, in-browser image optimization, and active learning.",
+  "main": "index.ts",
+  "keywords": [
+    "sutram",
+    "sutramvision",
+    "ocr",
+    "vlm",
+    "angular",
+    "primeng",
+    "handwriting",
+    "gemini",
+    "tabular"
+  ],
+  "author": "Antigravity & Sutram Development Team",
+  "license": "MIT",
+  "peerDependencies": {
+    "@angular/common": ">=16.0.0",
+    "@angular/core": ">=16.0.0",
+    "@angular/forms": ">=16.0.0",
+    "primeng": ">=16.0.0"
+  }
+}

@@ -1,0 +1,542 @@
+.master-users-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* ── Active User Profile Banner ──────────────────────────────── */
+.active-user-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0.75rem 1rem;
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(99, 102, 241, 0.22);
+  border-radius: 8px;
+
+  .user-avatar-box {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: var(--erp-primary, #6366f1);
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    flex-shrink: 0;
+  }
+
+  .user-bar-details {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+
+    .bar-caption {
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--erp-text-muted, #64748b);
+      font-weight: 600;
+    }
+
+    .bar-name-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+
+      .bar-name {
+        font-weight: 700;
+        font-size: 0.95rem;
+        color: var(--erp-text, #0f172a);
+      }
+
+      .bar-login {
+        font-size: 0.78rem;
+        color: var(--erp-text-muted, #64748b);
+      }
+
+      .role-pill {
+        font-size: 0.65rem;
+        font-weight: 700;
+        padding: 0.1rem 0.45rem;
+        border-radius: 4px;
+        background: rgba(99, 102, 241, 0.12);
+        color: var(--erp-primary, #6366f1);
+        border: 1px solid rgba(99, 102, 241, 0.25);
+
+        &.badge-super {
+          background: rgba(16, 185, 129, 0.12);
+          color: #10b981;
+          border-color: rgba(16, 185, 129, 0.3);
+        }
+      }
+    }
+  }
+}
+
+/* ── Toolbar ─────────────────────────────────────────────────── */
+.users-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+
+  .toolbar-left {
+    display: flex;
+    align-items: center;
+
+    .toolbar-title {
+      font-weight: 700;
+      font-size: 0.95rem;
+      color: var(--erp-text, #0f172a);
+    }
+
+    .user-count-badge {
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 0.15rem 0.5rem;
+      border-radius: 12px;
+      background: rgba(99, 102, 241, 0.1);
+      color: var(--erp-primary, #6366f1);
+    }
+  }
+
+  .add-user-btn {
+    font-size: 0.8rem;
+  }
+}
+
+/* ── Add User Panel ──────────────────────────────────────────── */
+.add-user-panel {
+  padding: 1rem 1.25rem;
+  border-radius: 8px;
+  background: var(--erp-bg, #f8fafc);
+  border: 1px solid var(--erp-surface-border, #e2e8f0);
+
+  h4 {
+    margin: 0 0 0.85rem 0;
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: var(--erp-text, #0f172a);
+    display: flex;
+    align-items: center;
+  }
+
+  .add-form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.85rem;
+  }
+
+  .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+
+    label {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--erp-text-muted, #64748b);
+    }
+  }
+
+  .panel-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 1rem;
+  }
+
+  .error-msg {
+    color: #ef4444;
+    font-size: 0.82rem;
+    margin-bottom: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+}
+
+/* ── 2-Panel Split Container ─────────────────────────────────── */
+.users-split-container {
+  display: grid;
+  grid-template-columns: 520px 1fr;
+  gap: 1.25rem;
+  min-height: 380px;
+}
+
+.users-left-panel,
+.projects-right-panel {
+  background: var(--erp-bg, #f8fafc);
+  border: 1px solid var(--erp-surface-border, #e2e8f0);
+  border-radius: 8px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* ── Left: Users Table ───────────────────────────────────────── */
+.users-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+
+  th,
+  td {
+    padding: 0.65rem 0.65rem;
+    border-bottom: 1px solid var(--erp-surface-border, #e2e8f0);
+    text-align: left;
+    color: var(--erp-text, #0f172a);
+    vertical-align: middle;
+  }
+
+  th {
+    background: var(--erp-surface, #ffffff);
+    font-weight: 700;
+    font-size: 0.76rem;
+    color: var(--erp-text-muted, #64748b);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+
+  tr {
+    transition: background 0.12s ease;
+
+    &:hover {
+      background: rgba(99, 102, 241, 0.06);
+    }
+
+    &.selected-row {
+      background: rgba(99, 102, 241, 0.12);
+      border-left: 3px solid var(--erp-primary, #6366f1);
+    }
+  }
+
+  .user-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+
+    .user-name {
+      font-weight: 600;
+      color: var(--erp-text, #0f172a);
+      font-size: 0.85rem;
+      line-height: 1.3;
+    }
+
+    .user-login {
+      font-size: 0.72rem;
+      color: var(--erp-text-muted, #64748b);
+    }
+  }
+
+  .role-badge {
+    padding: 0.15rem 0.45rem;
+    border-radius: 4px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    background: var(--erp-surface, #ffffff);
+    border: 1px solid var(--erp-surface-border, #e2e8f0);
+    display: inline-block;
+
+    &.badge-super {
+      background: rgba(16, 185, 129, 0.1);
+      color: #10b981;
+      border-color: rgba(16, 185, 129, 0.3);
+    }
+
+    &.badge-admin {
+      background: rgba(99, 102, 241, 0.1);
+      color: #6366f1;
+      border-color: rgba(99, 102, 241, 0.3);
+    }
+  }
+
+  .perm-toggle-btn {
+    padding: 0.15rem 0.45rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+
+    &.perm-enabled {
+      color: #10b981;
+      background: rgba(16, 185, 129, 0.08);
+
+      &:hover {
+        background: rgba(16, 185, 129, 0.18);
+      }
+    }
+
+    &.perm-disabled {
+      color: #ef4444;
+      background: rgba(239, 68, 68, 0.08);
+
+      &:hover {
+        background: rgba(239, 68, 68, 0.18);
+      }
+    }
+  }
+
+  .full-access-text {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #10b981;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .active-user-badge {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #10b981;
+    background: rgba(16, 185, 129, 0.12);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    padding: 0.18rem 0.5rem;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+  }
+
+  .switch-btn {
+    padding: 0.18rem 0.5rem;
+    font-size: 0.72rem;
+    height: 24px;
+  }
+}
+
+/* ── Right: Project Access ───────────────────────────────────── */
+.projects-right-panel {
+  .panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 0.6rem;
+    border-bottom: 1px solid var(--erp-surface-border, #e2e8f0);
+
+    .title-wrap {
+      display: flex;
+      align-items: center;
+
+      .title {
+        font-weight: 600;
+        font-size: 0.88rem;
+        color: var(--erp-text, #0f172a);
+      }
+    }
+
+    .badge {
+      font-size: 0.65rem;
+      font-weight: 700;
+      color: #10b981;
+      background: rgba(16, 185, 129, 0.12);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      padding: 0.15rem 0.45rem;
+      border-radius: 4px;
+    }
+  }
+
+  .superadmin-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 0.75rem 0.9rem;
+    border-radius: 6px;
+    background: rgba(16, 185, 129, 0.08);
+    border: 1px solid rgba(16, 185, 129, 0.25);
+    margin-bottom: 0.5rem;
+
+    .notice-icon {
+      font-size: 1.15rem;
+      color: #10b981;
+      margin-top: 2px;
+    }
+
+    .notice-text {
+      font-size: 0.78rem;
+      line-height: 1.4;
+      color: var(--erp-text, #0f172a);
+
+      strong {
+        display: block;
+        color: #059669;
+        margin-bottom: 2px;
+      }
+    }
+  }
+
+  .access-sub {
+    margin: 0.25rem 0 0.5rem 0;
+    font-size: 0.78rem;
+    color: var(--erp-text-muted, #64748b);
+  }
+
+  .projects-access-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    overflow-y: auto;
+    max-height: 320px;
+
+    .project-access-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.55rem 0.85rem;
+      border-radius: 6px;
+      background: var(--erp-surface, #ffffff);
+      border: 1px solid var(--erp-surface-border, #e2e8f0);
+      transition: all 0.12s ease;
+
+      &:hover {
+        border-color: var(--erp-primary, #6366f1);
+      }
+
+      .proj-info {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+
+        .proj-title {
+          font-weight: 600;
+          font-size: 0.84rem;
+          color: var(--erp-text, #0f172a);
+        }
+
+        .proj-slug {
+          font-size: 0.72rem;
+          color: var(--erp-text-muted, #64748b);
+        }
+      }
+
+      .super-access-pill {
+        font-size: 0.68rem;
+        font-weight: 700;
+        color: #10b981;
+        background: rgba(16, 185, 129, 0.1);
+        padding: 0.12rem 0.45rem;
+        border-radius: 4px;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+    }
+  }
+}
+
+/* ── Deep Dark Mode Overrides (Rules 1, 20, 21) ───────────────── */
+::ng-deep body.dark-mode {
+  .sutram-master-users-dialog {
+    .p-dialog {
+      background: #1e293b !important;
+      color: #f8fafc !important;
+      border: 1px solid #334155 !important;
+    }
+
+    .p-dialog-header,
+    .p-dialog-content,
+    .p-dialog-footer {
+      background: #1e293b !important;
+      color: #f8fafc !important;
+    }
+
+    .active-user-bar {
+      background: rgba(99, 102, 241, 0.15) !important;
+      border-color: rgba(99, 102, 241, 0.35) !important;
+
+      .bar-name {
+        color: #f8fafc !important;
+      }
+    }
+
+    .users-left-panel,
+    .projects-right-panel,
+    .add-user-panel {
+      background: #0f172a !important;
+      border-color: #334155 !important;
+    }
+
+    .users-table {
+      th {
+        background: #1e293b !important;
+        border-color: #334155 !important;
+        color: #94a3b8 !important;
+      }
+
+      td {
+        border-color: #334155 !important;
+        color: #f8fafc !important;
+      }
+
+      tr:hover {
+        background: rgba(255, 255, 255, 0.04) !important;
+      }
+
+      tr.selected-row {
+        background: rgba(99, 102, 241, 0.2) !important;
+      }
+
+      .user-name {
+        color: #f8fafc !important;
+      }
+
+      .role-badge {
+        background: #1e293b !important;
+        border-color: #334155 !important;
+        color: #94a3b8 !important;
+
+        &.badge-super {
+          color: #34d399 !important;
+          border-color: rgba(52, 211, 153, 0.4) !important;
+        }
+
+        &.badge-admin {
+          color: #818cf8 !important;
+          border-color: rgba(129, 140, 248, 0.4) !important;
+        }
+      }
+    }
+
+    .projects-right-panel {
+      .project-access-item {
+        background: #1e293b !important;
+        border-color: #334155 !important;
+
+        .proj-title {
+          color: #f8fafc !important;
+        }
+      }
+
+      .superadmin-notice {
+        background: rgba(16, 185, 129, 0.12) !important;
+        border-color: rgba(16, 185, 129, 0.3) !important;
+
+        .notice-text {
+          color: #f8fafc !important;
+
+          strong {
+            color: #34d399 !important;
+          }
+        }
+      }
+    }
+
+    input[type="text"],
+    input[type="password"],
+    .p-inputtext,
+    .p-dropdown {
+      background: #0f172a !important;
+      color: #f8fafc !important;
+      border-color: #334155 !important;
+
+      &:focus {
+        border-color: #6366f1 !important;
+      }
+    }
+  }
+}

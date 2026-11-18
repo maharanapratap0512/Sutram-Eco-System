@@ -1,0 +1,394 @@
+<p-dialog
+  [(visible)]="visible"
+  [modal]="true"
+  [dismissableMask]="true"
+  [draggable]="false"
+  [resizable]="false"
+  [style]="{ width: '96vw', maxWidth: '1440px' }"
+  styleClass="erp-table-designer-dialog"
+  (onHide)="close()">
+
+  <ng-template pTemplate="header">
+    <div class="dialog-header-custom">
+      <div class="header-icon-badge">
+        <i class="pi pi-table"></i>
+      </div>
+      <div class="header-titles">
+        <span class="header-main-title">Create New Table</span>
+        <span class="header-sub-title">Define schema columns, data types, constraints, and relationships</span>
+      </div>
+    </div>
+  </ng-template>
+
+  <div class="designer-container">
+    <!-- 1. Table Metadata & Quick Presets -->
+    <div class="designer-meta-card">
+      <div class="meta-row">
+        <div class="meta-field">
+          <label class="meta-label">Table Name <span class="req">*</span></label>
+          <input
+            type="text"
+            pInputText
+            class="p-inputtext-sm font-mono meta-input"
+            [(ngModel)]="newTableName"
+            (ngModelChange)="updateLiveSql()"
+            placeholder="e.g. sales_orders, products" />
+        </div>
+
+        <div class="meta-field">
+          <label class="meta-label">Display Label</label>
+          <input
+            type="text"
+            pInputText
+            class="p-inputtext-sm meta-input"
+            [(ngModel)]="newTableLabel"
+            placeholder="e.g. Sales Orders" />
+        </div>
+
+        <div class="meta-field flex-grow">
+          <label class="meta-label">Description</label>
+          <input
+            type="text"
+            pInputText
+            class="p-inputtext-sm meta-input"
+            [(ngModel)]="newTableDesc"
+            placeholder="Optional table notes" />
+        </div>
+      </div>
+
+      <!-- Presets Quick Actions -->
+      <div class="presets-row">
+        <span class="presets-label"><i class="pi pi-bolt"></i> Presets:</span>
+        <button
+          type="button"
+          class="preset-chip"
+          (click)="addAuditTimestampsPreset()"
+          title="Add created_at and updated_at datetime columns">
+          <i class="pi pi-clock"></i> + Timestamps
+        </button>
+        <button
+          type="button"
+          class="preset-chip"
+          (click)="addStatusPreset()"
+          title="Add status and is_active flag columns">
+          <i class="pi pi-check-circle"></i> + Status & Active
+        </button>
+        <button
+          type="button"
+          class="preset-chip"
+          (click)="addAddressPreset()"
+          title="Add street, city, state, pincode address columns">
+          <i class="pi pi-map-marker"></i> + Address
+        </button>
+      </div>
+    </div>
+
+    <!-- 2. Columns Definition Table -->
+    <div class="designer-grid-card">
+      <table class="designer-table">
+        <thead>
+          <tr>
+            <th class="th-num">#</th>
+            <th class="th-name">Column Name <span class="req">*</span></th>
+            <th class="th-label">Display Label</th>
+            <th class="th-type">Type</th>
+            <th class="th-len">Length</th>
+            <th class="th-check" title="Allow NULL values">Null</th>
+            <th class="th-check" title="Unique constraint">Unique</th>
+            <th class="th-check" title="Database Index">Index</th>
+            <th class="th-default">Default</th>
+            <th class="th-actions">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <ng-container *ngFor="let col of designerColumns; let i = index">
+            <!-- Row for each column -->
+            <tr class="col-row" [class.pk-row]="col.is_pk" [class.fk-parent-row]="col.sql_type === 'FK'">
+              <!-- Row Index / PK Badge -->
+              <td class="td-num">
+                <span *ngIf="col.is_pk" class="pk-badge" title="Primary Key (Auto-Increment)">PK</span>
+                <span *ngIf="!col.is_pk" class="row-num">{{ i }}</span>
+              </td>
+
+              <!-- Column Name -->
+              <td class="td-name">
+                <input
+                  *ngIf="!col.is_pk"
+                  type="text"
+                  pInputText
+                  class="p-inputtext-sm font-mono cell-ctrl"
+                  [(ngModel)]="col.name"
+                  (ngModelChange)="onColumnNameInput(col, i)"
+                  placeholder="column_name" />
+                <div *ngIf="col.is_pk" class="locked-text font-mono">
+                  _id <span class="badge-auto">AUTO</span>
+                </div>
+              </td>
+
+              <!-- Display Label -->
+              <td class="td-label">
+                <input
+                  *ngIf="!col.is_pk"
+                  type="text"
+                  pInputText
+                  class="p-inputtext-sm cell-ctrl"
+                  [(ngModel)]="col.label"
+                  (ngModelChange)="updateLiveSql()"
+                  placeholder="Label" />
+                <span *ngIf="col.is_pk" class="locked-subtext">ID (Primary Key)</span>
+              </td>
+
+              <!-- Data Type -->
+              <td class="td-type">
+                <p-dropdown
+                  *ngIf="!col.is_pk"
+                  [options]="sqlTypes"
+                  [(ngModel)]="col.sql_type"
+                  (onChange)="onSqlTypeChange(col)"
+                  optionLabel="label"
+                  optionValue="value"
+                  styleClass="designer-dropdown cell-ctrl"
+                  appendTo="body">
+                </p-dropdown>
+                <div *ngIf="col.is_pk" class="locked-text font-mono">INTEGER</div>
+              </td>
+
+              <!-- Length / Precision -->
+              <td class="td-len">
+                <input
+                  *ngIf="!col.is_pk && ['VARCHAR', 'DECIMAL', 'ENUM'].includes(col.sql_type)"
+                  type="text"
+                  pInputText
+                  class="p-inputtext-sm font-mono cell-ctrl text-center"
+                  [(ngModel)]="col.length_precision"
+                  (ngModelChange)="updateLiveSql()"
+                  placeholder="255" />
+                <span *ngIf="col.is_pk || !['VARCHAR', 'DECIMAL', 'ENUM'].includes(col.sql_type)" class="dash-muted">-</span>
+              </td>
+
+              <!-- Allow NULL -->
+              <td class="td-check">
+                <p-checkbox
+                  *ngIf="!col.is_pk"
+                  [(ngModel)]="col.is_required"
+                  [binary]="true"
+                  (onChange)="updateLiveSql()"
+                  [trueValue]="false"
+                  [falseValue]="true"
+                  title="Uncheck to make required (NOT NULL)">
+                </p-checkbox>
+                <span *ngIf="col.is_pk" class="dash-muted">No</span>
+              </td>
+
+              <!-- Unique -->
+              <td class="td-check">
+                <p-checkbox
+                  *ngIf="!col.is_pk"
+                  [(ngModel)]="col.is_unique"
+                  [binary]="true"
+                  (onChange)="updateLiveSql()"
+                  title="Unique constraint">
+                </p-checkbox>
+                <i *ngIf="col.is_pk" class="pi pi-check text-success" title="Primary key is unique"></i>
+              </td>
+
+              <!-- Index -->
+              <td class="td-check">
+                <p-checkbox
+                  *ngIf="!col.is_pk"
+                  [(ngModel)]="col.has_index"
+                  [binary]="true"
+                  (onChange)="updateLiveSql()"
+                  title="Create index">
+                </p-checkbox>
+                <i *ngIf="col.is_pk" class="pi pi-check text-success" title="Primary key is indexed"></i>
+              </td>
+
+              <!-- Default Value -->
+              <td class="td-default">
+                <div *ngIf="!col.is_pk" class="default-wrap">
+                  <p-dropdown
+                    [options]="defaultTypes"
+                    [(ngModel)]="col.default_type"
+                    (onChange)="updateLiveSql()"
+                    optionLabel="label"
+                    optionValue="value"
+                    styleClass="designer-dropdown def-type-select cell-ctrl"
+                    appendTo="body">
+                  </p-dropdown>
+                  <input
+                    *ngIf="col.default_type === 'CUSTOM'"
+                    type="text"
+                    pInputText
+                    class="p-inputtext-sm cell-ctrl def-val-input"
+                    [(ngModel)]="col.default_value"
+                    (ngModelChange)="updateLiveSql()"
+                    placeholder="Val" />
+                </div>
+                <span *ngIf="col.is_pk" class="dash-muted">-</span>
+              </td>
+
+              <!-- Actions -->
+              <td class="td-actions">
+                <div class="row-actions" *ngIf="!col.is_pk">
+                  <button
+                    pButton
+                    type="button"
+                    class="p-button-sm p-button-rounded p-button-text act-btn"
+                    icon="pi pi-arrow-up"
+                    [disabled]="i <= 1"
+                    (click)="moveColumnUp(i)"
+                    title="Move Up">
+                  </button>
+                  <button
+                    pButton
+                    type="button"
+                    class="p-button-sm p-button-rounded p-button-text act-btn"
+                    icon="pi pi-arrow-down"
+                    [disabled]="i >= designerColumns.length - 1"
+                    (click)="moveColumnDown(i)"
+                    title="Move Down">
+                  </button>
+                  <button
+                    pButton
+                    type="button"
+                    class="p-button-sm p-button-rounded p-button-text p-button-danger act-btn"
+                    icon="pi pi-trash"
+                    (click)="removeColumnRow(i)"
+                    title="Delete Column">
+                  </button>
+                </div>
+                <span *ngIf="col.is_pk" class="pk-locked-lbl">Primary</span>
+              </td>
+            </tr>
+
+            <!-- Foreign Key Sub-Panel -->
+            <tr *ngIf="col.sql_type === 'FK'" class="fk-child-row">
+              <td></td>
+              <td colspan="9" class="fk-config-cell">
+                <div class="fk-panel">
+                  <div class="fk-badge">
+                    <i class="pi pi-link"></i> FK Relation
+                  </div>
+
+                  <div class="fk-field">
+                    <label class="fk-lbl">Target Table *</label>
+                    <p-dropdown
+                      [options]="catalog"
+                      [(ngModel)]="col.ref_table"
+                      (onChange)="onForeignKeyTableChange(col)"
+                      optionLabel="display_name"
+                      optionValue="table_name"
+                      placeholder="Select target table"
+                      styleClass="designer-dropdown fk-select"
+                      appendTo="body">
+                    </p-dropdown>
+                  </div>
+
+                  <div class="fk-field">
+                    <label class="fk-lbl">Target PK Column</label>
+                    <p-dropdown
+                      [options]="col.candidate_ref_cols || []"
+                      [(ngModel)]="col.ref_col"
+                      (onChange)="updateLiveSql()"
+                      optionLabel="label"
+                      optionValue="value"
+                      styleClass="designer-dropdown fk-select"
+                      appendTo="body">
+                    </p-dropdown>
+                  </div>
+
+                  <div class="fk-field flex-grow">
+                    <label class="fk-lbl">Display Sub-Columns</label>
+                    <p-multiSelect
+                      [options]="col.candidate_display_cols || []"
+                      [(ngModel)]="col.ref_select"
+                      (onChange)="updateLiveSql()"
+                      optionLabel="label"
+                      optionValue="value"
+                      placeholder="Pick display sub-columns"
+                      styleClass="designer-multiselect fk-multiselect"
+                      appendTo="body"
+                      [maxSelectedLabels]="3">
+                    </p-multiSelect>
+                  </div>
+
+                  <div class="fk-field">
+                    <label class="fk-lbl">On Delete</label>
+                    <p-dropdown
+                      [options]="onDeleteOptions"
+                      [(ngModel)]="col.on_delete"
+                      (onChange)="updateLiveSql()"
+                      optionLabel="label"
+                      optionValue="value"
+                      styleClass="designer-dropdown fk-select"
+                      appendTo="body">
+                    </p-dropdown>
+                  </div>
+                </div>
+              </td>
+            </tr>
+          </ng-container>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- 3. Bottom Action Bar -->
+    <div class="designer-bottom-bar">
+      <div class="bottom-left">
+        <button
+          pButton
+          type="button"
+          class="btn-compact p-button-sm p-button-outlined"
+          (click)="addColumnRow()"
+          icon="pi pi-plus"
+          label="Add Column">
+        </button>
+
+        <button
+          pButton
+          type="button"
+          class="btn-compact p-button-sm p-button-text font-mono"
+          (click)="showSqlPreview = !showSqlPreview"
+          icon="pi pi-code"
+          [label]="showSqlPreview ? 'Hide SQL' : 'SQL Preview'">
+        </button>
+      </div>
+
+      <div class="bottom-stats">
+        <span>Columns: <strong>{{ designerColumns.length }}</strong></span>
+      </div>
+    </div>
+
+    <!-- Collapsible Live SQL Preview -->
+    <div *ngIf="showSqlPreview" class="live-sql-box">
+      <div class="sql-box-header">
+        <span>Generated DDL Statement</span>
+      </div>
+      <pre class="sql-code font-mono">{{ liveSqlPreview }}</pre>
+    </div>
+  </div>
+
+  <ng-template pTemplate="footer">
+    <div class="designer-dialog-footer">
+      <button
+        pButton
+        type="button"
+        label="Cancel"
+        class="btn-footer p-button-text p-button-sm p-button-secondary"
+        (click)="close()"
+        [disabled]="isCreatingTable">
+      </button>
+
+      <button
+        pButton
+        type="button"
+        label="Create Table"
+        icon="pi pi-check"
+        class="btn-footer p-button-primary p-button-sm"
+        [loading]="isCreatingTable"
+        (click)="submitCreateTable()">
+      </button>
+    </div>
+  </ng-template>
+</p-dialog>

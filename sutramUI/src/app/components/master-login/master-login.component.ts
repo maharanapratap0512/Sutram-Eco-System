@@ -1,0 +1,62 @@
+import { Component, Input, Output, EventEmitter, ChangeDetectorRef } from '@angular/core';
+import { ProjectContextService } from '../../services/project-context.service';
+import { MasterUser } from '../../models/project.model';
+
+@Component({
+  selector: 'app-master-login',
+  templateUrl: './master-login.component.html',
+  styleUrls: ['./master-login.component.scss']
+})
+export class MasterLoginComponent {
+  @Input() isDarkMode: boolean = false;
+  @Output() loginSuccess = new EventEmitter<MasterUser>();
+  @Output() toggleTheme = new EventEmitter<void>();
+
+  public username: string = '';
+  public password: string = '';
+  public isLoading: boolean = false;
+  public errorMessage: string = '';
+
+  constructor(
+    private projectContext: ProjectContextService,
+    private cdr: ChangeDetectorRef
+  ) {}
+
+  public onLogin(): void {
+    if (!this.username?.trim()) {
+      this.errorMessage = 'कृपया यूज़रनेम दर्ज करें (Please enter username)';
+      return;
+    }
+    if (!this.password?.trim()) {
+      this.errorMessage = 'कृपया पासवर्ड दर्ज करें (Please enter password)';
+      return;
+    }
+
+    this.isLoading = true;
+    this.errorMessage = '';
+
+    this.projectContext.loginMasterUser(this.username.trim(), this.password.trim()).subscribe({
+      next: (res) => {
+        this.isLoading = false;
+        if (res && res.success && res.result) {
+          this.loginSuccess.emit(res.result);
+        } else {
+          this.errorMessage = res?.error || 'अमान्य यूज़रनेम या पासवर्ड (Invalid username or password)';
+        }
+        this.cdr.markForCheck();
+      },
+      error: (err) => {
+        this.isLoading = false;
+        this.errorMessage = err?.error?.error || err?.message || 'सर्वर से संपर्क करने में त्रुटि (Connection failed)';
+        this.cdr.markForCheck();
+      }
+    });
+  }
+
+  public fillDemoAdmin(): void {
+    this.username = 'admin';
+    this.password = 'sutram';
+    this.errorMessage = '';
+  }
+}
+

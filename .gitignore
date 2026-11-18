@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+**/node_modules/
+.npm/
+.npmrc
+
+# Angular / Frontend build & cache
+dist/
+sutramUI/dist/
+sutramUI/.angular/
+packages/sutramExcel/public/
+
+# Tauri / Rust build artifacts
+src-tauri/target/
+src-tauri/gen/
+
+# User Databases, Backups, Temp & Release ZIPs (NEVER commit user data!)
+data/
+**/data/
+SutramData/
+backups/
+releases/
+temp_uploads/
+temp_updates/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.zip
+
+# OS & Editor clutter
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.env
+.env.local

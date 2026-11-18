@@ -1,0 +1,137 @@
+<p-dialog 
+  [(visible)]="visible" 
+  [modal]="true" 
+  [style]="{ width: '750px', maxWidth: '95vw' }" 
+  [header]="'🔑 VLM Vision & OCR API Profiles Vault'" 
+  [closable]="true"
+  (onHide)="close()">
+
+  <div class="profiles-modal-body">
+    <!-- Notice & Free Tier Tips -->
+    <div class="tip-banner">
+      <i class="pi pi-info-circle"></i>
+      <span>Add multiple free Google Gemini keys to multiply your daily free quota. When 15 RPM / 429 rate limit is reached, it automatically auto-rotates to your backup keys!</span>
+    </div>
+
+    <!-- Auto-Rotate Toggle -->
+    <div class="rotate-card">
+      <div>
+        <div class="rotate-title">Auto-Rotate on Rate Limit (HTTP 429)</div>
+        <div class="rotate-desc">Seamlessly failover to next free profile if rate limit or daily quota is exhausted</div>
+      </div>
+      <p-checkbox [(ngModel)]="autoRotateOnRateLimit" [binary]="true" (onChange)="toggleAutoRotate()"></p-checkbox>
+    </div>
+
+    <!-- Active Profiles List Header -->
+    <div class="section-header">
+      <span class="section-title">Configured Accounts ({{ profiles.length }})</span>
+      <button pButton type="button" label="+ Add Profile" class="p-button-sm p-button-outlined" (click)="isAddingNew = !isAddingNew"></button>
+    </div>
+
+    <!-- New Profile Form Drawer -->
+    <div *ngIf="isAddingNew" class="add-form-card">
+      <div class="form-title">Add New API Key Profile</div>
+      
+      <div class="form-row">
+        <div class="form-col col-6">
+          <label class="field-label">Provider</label>
+          <p-dropdown 
+            [options]="providerOptions" 
+            [(ngModel)]="newProfile.provider" 
+            optionLabel="label" 
+            optionValue="value" 
+            (onChange)="onProviderChange($event.value)"
+            styleClass="w-100">
+          </p-dropdown>
+        </div>
+        <div class="form-col col-6">
+          <label class="field-label">Profile Name / Label</label>
+          <input type="text" pInputText [(ngModel)]="newProfile.label" placeholder="e.g. My Personal Free Account" class="w-100" />
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-col col-8" *ngIf="newProfile.provider !== 'ollama'">
+          <label class="field-label">API Key</label>
+          <input type="password" pInputText [(ngModel)]="newProfile.apiKey" placeholder="AIzaSy... / gsk_..." class="w-100" />
+        </div>
+        <div class="form-col col-8" *ngIf="newProfile.provider === 'ollama'">
+          <label class="field-label">Ollama Endpoint URL</label>
+          <input type="text" pInputText [(ngModel)]="newProfile.endpoint" placeholder="http://localhost:11434" class="w-100" />
+        </div>
+        <div class="form-col col-4">
+          <label class="field-label">Model</label>
+          <input type="text" pInputText [(ngModel)]="newProfile.model" placeholder="Model name" class="w-100" />
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button pButton type="button" label="Cancel" class="p-button-sm p-button-text" (click)="isAddingNew = false"></button>
+        <button pButton type="button" label="Save Profile" icon="pi pi-check" class="p-button-sm p-button-primary" (click)="saveNewProfile()"></button>
+      </div>
+    </div>
+
+    <!-- Profiles Table -->
+    <div class="table-container">
+      <table class="profile-table">
+        <thead>
+          <tr>
+            <th>Profile</th>
+            <th>Provider</th>
+            <th>Status</th>
+            <th class="text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let prof of profiles" [class.table-active]="prof.isDefault">
+            <td>
+              <div class="profile-info">
+                <i *ngIf="prof.isDefault" class="pi pi-star-fill text-warning star-icon" title="Default Active Profile"></i>
+                <i *ngIf="!prof.isDefault" class="pi pi-star text-muted star-icon cursor-pointer" title="Set as Default" (click)="setDefault(prof.id)"></i>
+                <div>
+                  <div class="profile-name">{{ prof.label }}</div>
+                  <div class="profile-model">{{ prof.model }}</div>
+                </div>
+              </div>
+            </td>
+            <td>
+              <p-tag [value]="prof.provider | uppercase" [severity]="
+                prof.provider === 'gemini' ? 'info' :
+                prof.provider === 'groq' ? 'warning' :
+                prof.provider === 'openai' ? 'success' : 'secondary'
+              "></p-tag>
+            </td>
+            <td>
+              <p-tag *ngIf="prof.status === 'online'" severity="success" value="Online"></p-tag>
+              <p-tag *ngIf="prof.status === 'error'" severity="danger" [value]="'Error'" [pTooltip]="prof.statusMessage"></p-tag>
+              <p-tag *ngIf="!prof.status || prof.status === 'untested'" severity="warning" value="Untested"></p-tag>
+            </td>
+            <td class="text-right">
+              <button 
+                pButton 
+                type="button" 
+                label="Test" 
+                icon="pi pi-bolt" 
+                class="p-button-xs p-button-outlined action-btn" 
+                [loading]="testingProfileId === prof.id"
+                (click)="testProfile(prof)">
+              </button>
+              <button 
+                pButton 
+                type="button" 
+                icon="pi pi-trash" 
+                class="p-button-xs p-button-rounded p-button-danger p-button-text action-btn" 
+                (click)="deleteProfile(prof.id)" 
+                title="Delete Profile">
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <ng-template pTemplate="footer">
+    <button pButton type="button" label="Done" class="p-button-sm p-button-secondary" (click)="close()"></button>
+  </ng-template>
+</p-dialog>

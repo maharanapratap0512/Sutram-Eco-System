@@ -1,0 +1,74 @@
+<div class="erp-layout">
+  <!-- 0. Master Workspace Login Screen (Shown when NOT authenticated) -->
+  <app-master-login
+    *ngIf="!projectContext.isAuthenticated"
+    [isDarkMode]="isDarkMode"
+    (loginSuccess)="onMasterLoginSuccess($event)"
+    (toggleTheme)="toggleTheme()">
+  </app-master-login>
+
+  <ng-container *ngIf="projectContext.isAuthenticated">
+    <!-- Top Multi-Project Header Titlebar (Active whenever at least 1 project is open) -->
+    <app-project-header
+      *ngIf="projectContext.openProjects.length > 0"
+      [projects]="projectContext.openProjects"
+      [activeProject]="projectContext.activeProject"
+      [showingHub]="showingHub"
+      [isServerOnline]="isServerOnline"
+      [isDarkMode]="isDarkMode"
+      (selectProject)="onSelectProjectTab($event)"
+      (closeProject)="onCloseProjectTab($event)"
+      (goToHub)="onGoToHub()"
+      (toggleTheme)="toggleTheme()"
+      (logout)="onLogout()"
+      (openLanModal)="onOpenLanModal()"
+      (openUpdateModal)="onOpenUpdateModal()">
+    </app-project-header>
+
+    <!-- 1. Sutram Dynamic Workspace Hub (Start Screen Canvas) -->
+    <app-project-hub
+      *ngIf="showingHub || projectContext.openProjects.length === 0"
+      [isDarkMode]="isDarkMode"
+      [isServerOnline]="isServerOnline"
+      (openProject)="onOpenProject($event)"
+      (toggleTheme)="toggleTheme()"
+      (logout)="onLogout()"
+      (openLanModal)="onOpenLanModal()"
+      (openUpdateModal)="onOpenUpdateModal()">
+    </app-project-hub>
+
+    <!-- 2. Active Project Workspace Canvas (Dedicated Single Studio connected to Active Database) -->
+    <main class="erp-main" *ngIf="!showingHub && projectContext.activeProject">
+      <div class="project-canvas-wrap">
+        <sutram-excel-studio
+          #studio
+          *ngIf="isStudioMounted"
+          [table]="selectedTable"
+          [isDark]="isDarkMode"
+          [apiBase]="'/_sutram/excel'"
+          [enableAuth]="true"
+          (openProjectUsersModal)="onOpenProjectUsersModal()"
+          (tableCreated)="onTableCreatedFromStudio($event)">
+        </sutram-excel-studio>
+      </div>
+    </main>
+
+    <!-- Project Users & Individual Table Rights Matrix Modal -->
+    <app-project-users-modal
+      [(visible)]="showProjectUsersModal"
+      [project]="projectContext.activeProject">
+    </app-project-users-modal>
+
+    <!-- LAN Network Explorer Modal -->
+    <app-lan-network-dialog
+      [(visible)]="showLanModal"
+      [isDarkMode]="isDarkMode">
+    </app-lan-network-dialog>
+
+    <!-- App Update Manager Modal -->
+    <app-app-updater-dialog
+      [(visible)]="showUpdateModal"
+      [isDarkMode]="isDarkMode">
+    </app-app-updater-dialog>
+  </ng-container>
+</div>

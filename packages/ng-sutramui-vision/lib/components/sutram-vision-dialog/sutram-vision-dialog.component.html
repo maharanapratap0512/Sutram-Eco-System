@@ -1,0 +1,76 @@
+<p-dialog 
+  [(visible)]="visible"
+  [modal]="true"
+  [style]="{ width: '92vw', maxWidth: '1350px', height: '88vh' }"
+  [contentStyle]="{ height: 'calc(88vh - 75px)', overflowY: 'auto', padding: '16px' }"
+  [maximizable]="true"
+  [closable]="true"
+  [closeOnEscape]="true"
+  styleClass="sutram-vision-modal"
+  (onHide)="close()">
+
+  <!-- Live Toast Notification HUD -->
+  <p-toast key="visionToast" position="top-right"></p-toast>
+
+  <!-- CUSTOM MODAL HEADER -->
+  <ng-template pTemplate="header">
+    <div class="vision-dialog-header">
+      <div class="header-left">
+        <div class="header-icon-box">
+          <i class="pi pi-camera"></i>
+        </div>
+        <div>
+          <div class="header-title">
+            SutramVision — Visual Document & Handwriting OCR
+            <span class="hindi-subtext">(हस्तलिखित रजिस्टर एवं बिल स्कैनर)</span>
+          </div>
+          <div class="header-subtitle">
+            Extract handwritten registers, invoices, and bilti directly into a brand-new spreadsheet tab
+          </div>
+        </div>
+      </div>
+
+      <div class="header-right">
+        <button 
+          pButton 
+          type="button" 
+          icon="pi pi-key" 
+          [label]="activeProfile?.label || 'API Key Profiles'" 
+          class="p-button-outlined p-button-sm profile-vault-btn" 
+          (click)="openProfiles()"
+          title="Configure API Keys, Gemini Free Tier & Auto-Rotation">
+        </button>
+      </div>
+    </div>
+  </ng-template>
+
+  <!-- MODAL BODY VIEW 1: SCANNER -->
+  <div *ngIf="currentView === 'scanner'" class="vision-dialog-body">
+    <sutram-vision-scanner
+      [isDarkMode]="isDarkMode"
+      [targetColumns]="targetSheetColumns"
+      [activeProfileLabel]="activeProfile?.label || ''"
+      (scanCompleted)="onScanCompleted($event)">
+    </sutram-vision-scanner>
+  </div>
+
+  <!-- MODAL BODY VIEW 2: PREVIEW & ALIGNMENT -->
+  <div *ngIf="currentView === 'preview'" class="vision-dialog-body">
+    <sutram-vision-preview-grid
+      [isDarkMode]="isDarkMode"
+      [previewImageUrl]="activePreviewImage"
+      [extractResult]="activeExtractResult"
+      [targetSheetColumns]="targetSheetColumns"
+      [tableName]="targetTableName"
+      (createNewSheet)="onCreateNewSheet($event)"
+      (closePreview)="onBackToScanner()">
+    </sutram-vision-preview-grid>
+  </div>
+
+  <!-- API Profiles Modal (Vault) -->
+  <sutram-vision-profiles-modal
+    [(visible)]="showProfilesModal"
+    [isDarkMode]="isDarkMode"
+    (profilesUpdated)="activeProfile = profileService.getActiveProfile()">
+  </sutram-vision-profiles-modal>
+</p-dialog>

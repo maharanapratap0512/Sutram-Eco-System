@@ -1,0 +1,338 @@
+<p-dialog
+  [(visible)]="visible"
+  [modal]="true"
+  [closable]="true"
+  [dismissableMask]="true"
+  [resizable]="false"
+  [draggable]="false"
+  [style]="{ width: '850px', maxWidth: '96vw' }"
+  styleClass="lan-network-dialog"
+  (onHide)="close()">
+
+  <ng-template pTemplate="header">
+    <div class="dialog-header-wrap">
+      <div class="header-icon-box">
+        <i class="pi pi-globe"></i>
+      </div>
+      <div class="header-text">
+        <h3 class="header-title">सूत्रम् लोकल नेटवर्क (Sutram LAN Network & P2P Sharing)</h3>
+        <p class="header-desc">वाई-फ़ाई/लोकल नेटवर्क पर प्रोजेक्ट्स शेयर करें व रिमोट कंप्यूटर्स से जुड़ें</p>
+      </div>
+    </div>
+  </ng-template>
+
+  <div class="dialog-body">
+    <!-- Navigation Tabs (Windows Network Explorer Style) -->
+    <div class="lan-nav-tabs">
+      <button
+        type="button"
+        class="nav-tab-btn"
+        [class.active]="activeTab === 'this_pc'"
+        (click)="activeTab = 'this_pc'">
+        <i class="pi pi-desktop me-2"></i>
+        <span>This PC (मेरा कंप्यूटर / शेयरिंग)</span>
+      </button>
+
+      <button
+        type="button"
+        class="nav-tab-btn"
+        [class.active]="activeTab === 'network'"
+        (click)="activeTab = 'network'">
+        <i class="pi pi-sitemap me-2"></i>
+        <span>Network (लोकल नेटवर्क कंप्यूटर)</span>
+        <span class="badge ms-2" *ngIf="peers.length > 0">{{ peers.length }}</span>
+      </button>
+    </div>
+
+    <!-- ── TAB 1: THIS PC (LOCAL SHARING) ────────────────────────── -->
+    <div class="tab-content" *ngIf="activeTab === 'this_pc'">
+      <!-- Machine Info Card -->
+      <div class="node-identity-card" *ngIf="localNode">
+        <div class="identity-col">
+          <span class="label">Computer Name</span>
+          <span class="val font-mono">{{ localNode.hostname || localNode.name }}</span>
+        </div>
+        <div class="identity-col">
+          <span class="label">LAN IP Address</span>
+          <span class="val font-mono highlight">{{ localNode.ip }}:{{ localNode.port }}</span>
+        </div>
+        <div class="identity-col">
+          <span class="label">Network Beacon</span>
+          <span class="status-pill online"><i class="pi pi-check-circle"></i> Active (UDP 43210)</span>
+        </div>
+      </div>
+
+      <!-- Sharing Setup Card (When configuring share) -->
+      <div class="share-config-card" *ngIf="sharingTargetProject">
+        <div class="config-header">
+          <h4>
+            <i class="pi pi-share-alt me-2"></i>
+            प्रोजेक्ट को नेटवर्क पर लाइव करें: <strong>{{ sharingTargetProject.project_name }}</strong>
+          </h4>
+          <button type="button" class="btn-close-sm" (click)="cancelSharePrompt()">✕</button>
+        </div>
+
+        <div class="config-body">
+          <div class="auth-select-group">
+            <label class="section-label">एक्सेस सुरक्षा (Access Security Protection):</label>
+            <div class="options-row">
+              <label class="radio-option" [class.selected]="shareAuthType === 'pin'">
+                <input type="radio" name="authType" value="pin" [(ngModel)]="shareAuthType" />
+                <span>4-अंकीय PIN (Recommended)</span>
+              </label>
+              <label class="radio-option" [class.selected]="shareAuthType === 'password'">
+                <input type="radio" name="authType" value="password" [(ngModel)]="shareAuthType" />
+                <span>सुरक्षित पासवर्ड (Password)</span>
+              </label>
+              <label class="radio-option" [class.selected]="shareAuthType === 'none'">
+                <input type="radio" name="authType" value="none" [(ngModel)]="shareAuthType" />
+                <span>खुला एक्सेस (Open / No PIN)</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="secret-input-row" *ngIf="shareAuthType === 'pin'">
+            <label>4-अंकीय एक्सेस पिन (PIN):</label>
+            <input
+              type="text"
+              pInputText
+              maxlength="8"
+              class="p-inputtext-sm font-mono w-48"
+              [(ngModel)]="sharePin"
+              placeholder="e.g. 1234" />
+            <small class="hint">LAN पर अन्य यूज़र्स इस पिन से ही डेटा एक्सेस कर पाएंगे</small>
+          </div>
+
+          <div class="secret-input-row" *ngIf="shareAuthType === 'password'">
+            <label>प्रोजेक्ट सुरक्षा पासवर्ड:</label>
+            <input
+              type="password"
+              pInputText
+              class="p-inputtext-sm w-64"
+              [(ngModel)]="sharePassword"
+              placeholder="गुप्त पासवर्ड दर्ज करें..." />
+          </div>
+
+          <div class="error-banner" *ngIf="shareError">
+            <i class="pi pi-exclamation-triangle me-1"></i> {{ shareError }}
+          </div>
+        </div>
+
+        <div class="config-footer">
+          <button
+            pButton
+            type="button"
+            class="p-button-sm p-button-outlined p-button-secondary"
+            (click)="cancelSharePrompt()"
+            label="रद्द करें (Cancel)">
+          </button>
+          <button
+            pButton
+            type="button"
+            class="p-button-sm p-button-success"
+            [loading]="isSubmittingShare"
+            (click)="confirmShareProject()"
+            icon="pi pi-check"
+            label="नेटवर्क पर लाइव करें (Go Live)">
+          </button>
+        </div>
+      </div>
+
+      <!-- Local Projects List -->
+      <div class="section-title-wrap">
+        <h4 class="title">इस कंप्यूटर के प्रोजेक्ट्स (Local Projects)</h4>
+        <span class="count-tag">{{ projects.length }} Projects</span>
+      </div>
+
+      <div class="projects-list-table">
+        <div class="project-row" *ngFor="let p of projects">
+          <div class="proj-left">
+            <div class="proj-dot" [style.background-color]="p.color || '#6366f1'"></div>
+            <div class="proj-meta">
+              <span class="proj-name">{{ p.project_name }}</span>
+              <span class="proj-slug font-mono">{{ p.project_slug }}.db</span>
+            </div>
+          </div>
+
+          <div class="proj-status">
+            <ng-container *ngIf="isProjectLive(p.project_slug)">
+              <span class="status-badge live">
+                <i class="pi pi-circle-fill dot-pulse"></i> 🟢 Live on LAN
+              </span>
+              <span class="auth-badge" *ngIf="getLiveProjectInfo(p.project_slug) as liveInfo">
+                {{ liveInfo.authType === 'pin' ? 'PIN 🔒' : (liveInfo.authType === 'password' ? 'Pass 🔑' : 'Open 🌐') }}
+              </span>
+            </ng-container>
+            <ng-container *ngIf="!isProjectLive(p.project_slug)">
+              <span class="status-badge private">
+                <i class="pi pi-lock"></i> Private (लोकल केवल)
+              </span>
+            </ng-container>
+          </div>
+
+          <div class="proj-actions">
+            <button
+              *ngIf="!isProjectLive(p.project_slug)"
+              pButton
+              type="button"
+              class="p-button-sm p-button-outlined p-button-primary"
+              (click)="promptShareProject(p)"
+              icon="pi pi-broadcast"
+              label="Go Live (शेयर करें)">
+            </button>
+
+            <button
+              *ngIf="isProjectLive(p.project_slug)"
+              pButton
+              type="button"
+              class="p-button-sm p-button-outlined p-button-danger"
+              (click)="unshareProject(p.project_slug)"
+              icon="pi pi-stop"
+              label="Stop Sharing">
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── TAB 2: NETWORK NEIGHBORHOOD (PEERS) ──────────────────── -->
+    <div class="tab-content" *ngIf="activeTab === 'network'">
+      <div class="network-radar-bar">
+        <div class="radar-status">
+          <i class="pi pi-spin pi-compass radar-icon"></i>
+          <span>लोकल नेटवर्क स्कैन जारी है (Auto-Discovery Active on Wi-Fi / LAN)...</span>
+        </div>
+        <button
+          pButton
+          type="button"
+          class="p-button-sm p-button-text"
+          (click)="lanService.refreshStatus().subscribe()"
+          icon="pi pi-refresh"
+          label="पुनः खोजें (Refresh)">
+        </button>
+      </div>
+
+      <!-- Empty State -->
+      <div class="empty-peers-box" *ngIf="peers.length === 0">
+        <div class="radar-circle">
+          <i class="pi pi-wifi"></i>
+        </div>
+        <h4>लोकल नेटवर्क पर कोई अन्य कंप्यूटर सक्रिय नहीं है</h4>
+        <p>जब आपके नेटवर्क/वाई-फ़ाई पर कोई अन्य सूत्रम् शुरू करेगा, वह स्वचालित रूप से यहाँ दिखाई देगा।</p>
+      </div>
+
+      <!-- Discovered Peers List -->
+      <div class="peers-grid" *ngIf="peers.length > 0">
+        <div class="peer-card" *ngFor="let peer of peers">
+          <div class="peer-header">
+            <div class="peer-icon-box">
+              <i class="pi pi-desktop"></i>
+            </div>
+            <div class="peer-info">
+              <span class="peer-name">{{ peer.hostname || peer.name }}</span>
+              <span class="peer-ip font-mono">{{ peer.ip }}:{{ peer.httpPort || 3300 }}</span>
+            </div>
+            <span class="peer-ping-pill">
+              <i class="pi pi-circle-fill text-success dot-sm"></i> Active
+            </span>
+          </div>
+
+          <!-- Peer Shared Projects -->
+          <div class="peer-projects">
+            <div class="peer-proj-title">शेयर किए गए प्रोजेक्ट्स ({{ peer.projects?.length || 0 }}):</div>
+
+            <div class="empty-sub" *ngIf="!peer.projects || peer.projects.length === 0">
+              इस कंप्यूटर ने अभी कोई प्रोजेक्ट लाइव नहीं किया है।
+            </div>
+
+            <div class="peer-proj-row" *ngFor="let rp of peer.projects">
+              <div class="rp-meta">
+                <span class="rp-name">{{ rp.name }}</span>
+                <span class="rp-sec-pill" [class.open]="rp.authType === 'none'">
+                  {{ rp.authType === 'pin' ? 'PIN आवश्यक' : (rp.authType === 'password' ? 'Password आवश्यक' : 'खुला एक्सेस') }}
+                </span>
+              </div>
+
+              <button
+                pButton
+                type="button"
+                class="p-button-sm p-button-outlined p-button-success"
+                (click)="onConnectToPeerProject(peer, rp)"
+                icon="pi pi-external-link"
+                label="खोलें (Connect)">
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <ng-template pTemplate="footer">
+    <div class="dialog-footer-wrap">
+      <button
+        pButton
+        type="button"
+        class="p-button-sm p-button-secondary p-button-text"
+        (click)="close()"
+        label="बंद करें (Close)">
+      </button>
+    </div>
+  </ng-template>
+</p-dialog>
+
+<!-- Remote PIN/Password Challenge Dialog -->
+<p-dialog
+  [(visible)]="isAuthModalOpen"
+  [modal]="true"
+  [closable]="true"
+  [style]="{ width: '420px' }"
+  styleClass="lan-auth-dialog">
+  <ng-template pTemplate="header">
+    <div class="auth-header">
+      <i class="pi pi-shield me-2 text-primary"></i>
+      <span>सुरक्षा सत्यापन (Remote Access PIN)</span>
+    </div>
+  </ng-template>
+
+  <div class="auth-body" *ngIf="selectedRemoteProject">
+    <p class="auth-intro">
+      प्रोजेक्ट <strong>{{ selectedRemoteProject.name }}</strong> को खोलने के लिए
+      {{ selectedRemoteProject.authType === 'pin' ? '4-अंकीय PIN' : 'पासवर्ड' }} दर्ज करें:
+    </p>
+
+    <div class="auth-input-box">
+      <input
+        [type]="selectedRemoteProject.authType === 'pin' ? 'password' : 'password'"
+        pInputText
+        class="p-inputtext-sm w-full text-center font-mono text-lg"
+        [(ngModel)]="authSecretInput"
+        (keyup.enter)="submitAuthChallenge()"
+        [placeholder]="selectedRemoteProject.authType === 'pin' ? 'PIN दर्ज करें' : 'पासवर्ड दर्ज करें'"
+        autofocus />
+    </div>
+
+    <div class="error-banner mt-2" *ngIf="authError">
+      <i class="pi pi-exclamation-triangle me-1"></i> {{ authError }}
+    </div>
+  </div>
+
+  <ng-template pTemplate="footer">
+    <button
+      pButton
+      type="button"
+      class="p-button-sm p-button-text"
+      (click)="isAuthModalOpen = false"
+      label="रद्द करें">
+    </button>
+    <button
+      pButton
+      type="button"
+      class="p-button-sm p-button-primary"
+      [loading]="isAuthenticating"
+      (click)="submitAuthChallenge()"
+      icon="pi pi-lock-open"
+      label="सत्यापित करें व खोलें">
+    </button>
+  </ng-template>
+</p-dialog>

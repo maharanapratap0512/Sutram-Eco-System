@@ -1,0 +1,535 @@
+<!-- ══════════════════════════════════════════════════════════ -->
+<!-- MAIN MODAL: REMINDER RULES MANAGER (DEFAULT LIST VIEW)     -->
+<!-- ══════════════════════════════════════════════════════════ -->
+<p-dialog [(visible)]="visible"
+          (onHide)="onClose()"
+          [modal]="true"
+          [focusTrap]="false"
+          [style]="{ width: '88vw', maxWidth: '1100px', height: '82vh' }"
+          [contentStyle]="{ height: 'calc(82vh - 65px)', overflowY: 'auto', padding: '16px' }"
+          [maximizable]="true"
+          [baseZIndex]="10000"
+          [closeOnEscape]="true"
+          styleClass="sutram-reminder-xl-modal">
+
+  <!-- MODAL HEADER -->
+  <ng-template pTemplate="header">
+    <div class="rules-manager-header">
+      <div class="header-left">
+        <div class="header-icon-box">
+          <i class="pi pi-bell"></i>
+        </div>
+        <div>
+          <div class="header-title">
+            Reminder Rules Manager
+            <span class="hindi-subtext">(अनुस्मारक नियम प्रबंधन)</span>
+          </div>
+          <div class="header-subtitle">
+            Configure automated data watchdogs & scheduled task alarms
+          </div>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <button pButton type="button"
+                class="p-button-sm p-button-primary"
+                icon="pi pi-plus"
+                label="+ Create New Reminder (नया अनुस्मारक बनाएं)"
+                (click)="openCreateEntry()">
+        </button>
+
+        <button pButton type="button"
+                class="p-button-sm p-button-outlined p-button-success ms-2"
+                icon="pi pi-table"
+                label="View Reminders Sheet"
+                (click)="onOpenIncomingSheetClick()"
+                title="Open live reminder results sheet">
+        </button>
+      </div>
+    </div>
+  </ng-template>
+
+  <!-- BODY: CONFIGURED RULES LIST (SHOWN BY DEFAULT) -->
+  <div class="rules-manager-body">
+
+    <!-- Empty State -->
+    <div *ngIf="rules.length === 0" class="empty-rules-box">
+      <div class="empty-icon-circle">
+        <i class="pi pi-bell-slash"></i>
+      </div>
+      <h6 class="mt-2 fw-bold text-dark">कोई सक्रिय अनुस्मारक नियम नहीं है (No reminder rules yet)</h6>
+      <p class="text-muted" style="font-size: 12.5px; max-width: 480px; margin: 0 auto 16px;">
+        नया डेटा पहरेदार (जैसे Low Stock, Insurance Expiry) या टास्क अलार्म बनाने के लिए नीचे बटन पर क्लिक करें।
+      </p>
+      <button pButton type="button"
+              class="p-button-sm p-button-primary"
+              icon="pi pi-plus"
+              label="Create First Reminder Rule (पहला नियम बनाएं)"
+              (click)="openCreateEntry()">
+      </button>
+    </div>
+
+    <!-- Rules Cards Grid -->
+    <div *ngIf="rules.length > 0" class="rules-cards-grid">
+      <div *ngFor="let r of rules"
+           class="rule-card"
+           [class.card-critical]="r.severity === 'critical' || r.is_permanent === 1"
+           [class.card-warning]="r.severity === 'warning'"
+           [class.card-info]="r.severity === 'info'"
+           [class.card-paused]="!r.active">
+
+        <!-- Card Header -->
+        <div class="rule-card-header">
+          <div class="rule-title-group" [title]="r.rule_name">
+            <span class="severity-dot"
+                  [class.dot-critical]="r.severity === 'critical' || r.is_permanent === 1"
+                  [class.dot-warning]="r.severity === 'warning'"
+                  [class.dot-info]="r.severity === 'info'"></span>
+            <strong class="rule-name-text">{{ r.rule_name }}</strong>
+          </div>
+
+          <div class="rule-badges-group">
+            <p-tag [value]="r.reminder_type === 'smart_watchdog' ? 'WATCHDOG' : 'ALARM'"
+                   [severity]="r.reminder_type === 'smart_watchdog' ? 'info' : 'success'"
+                   [icon]="r.reminder_type === 'smart_watchdog' ? 'pi pi-eye' : 'pi pi-clock'"
+                   styleClass="compact-rule-tag">
+            </p-tag>
+
+            <p-tag *ngIf="r.is_permanent"
+                   value="PERMANENT"
+                   severity="danger"
+                   icon="pi pi-bookmark-fill"
+                   styleClass="compact-rule-tag">
+            </p-tag>
+
+            <!-- Active / Paused Status Toggle Tick Mark -->
+            <button type="button"
+                    class="rule-status-tick-btn"
+                    [class.is-active]="r.active"
+                    [class.is-paused]="!r.active"
+                    (click)="onToggleRuleActive(r)"
+                    [title]="r.active ? 'सक्रिय (Active) - क्लिक करके पॉज़ करें' : 'पॉज़ (Paused) - क्लिक करके सक्रिय करें'">
+              <i class="pi" [ngClass]="r.active ? 'pi-check-circle' : 'pi-circle'"></i>
+            </button>
+          </div>
+        </div>
+
+        <!-- Card Body -->
+        <div class="rule-card-body">
+          <div *ngIf="r.reminder_type === 'smart_watchdog'" class="rule-cond-summary">
+            <i class="pi pi-database text-muted"></i>
+            <span class="tbl-badge">{{ r.target_table }}.{{ r.target_column }}</span>
+            <span class="op-badge">{{ r.operator }}</span>
+            <strong class="val-badge">{{ r.operand_value }}</strong>
+          </div>
+
+          <div *ngIf="r.reminder_type === 'normal'" class="rule-cond-summary">
+            <i class="pi pi-clock text-muted"></i>
+            <span>{{ r.target_datetime || 'No datetime' }}</span>
+            <span *ngIf="r.notes" class="text-muted ms-2">({{ r.notes }})</span>
+          </div>
+
+          <div class="rule-msg-preview" [title]="r.message_template">
+            <i class="pi pi-comment text-muted"></i>
+            <span>{{ r.message_template }}</span>
+          </div>
+        </div>
+
+        <!-- Card Footer -->
+        <div class="rule-card-footer">
+          <small class="text-muted schedule-label">
+            <i class="pi pi-calendar"></i> {{ r.frequency || 'daily_once' }} {{ r.schedule_time ? '@ ' + r.schedule_time : '' }}
+          </small>
+
+          <div class="card-action-btns">
+            <button pButton type="button"
+                    class="p-button-sm p-button-outlined p-button-secondary me-1 py-1 px-2"
+                    icon="pi pi-bolt"
+                    label="Test"
+                    (click)="onTestExistingRule(r)"
+                    title="Test live matching count right now">
+            </button>
+
+            <button pButton type="button"
+                    class="p-button-sm p-button-outlined p-button-secondary me-1 py-1 px-2"
+                    icon="pi pi-pencil"
+                    label="Edit"
+                    (click)="onEditRule(r)"
+                    title="Edit rule settings in Entry Form">
+            </button>
+
+            <button pButton type="button"
+                    class="p-button-sm p-button-outlined p-button-danger py-1 px-2"
+                    icon="pi pi-trash"
+                    (click)="onDeleteRule(r)"
+                    title="Delete rule">
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+
+</p-dialog>
+
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<!-- SEPARATE ENTRY FORM MODAL (CREATE & EDIT REMINDER RULE)     -->
+<!-- ══════════════════════════════════════════════════════════ -->
+<p-dialog [(visible)]="showEntryModal"
+          [modal]="true"
+          [focusTrap]="false"
+          [baseZIndex]="20000"
+          [autoZIndex]="true"
+          [style]="{ width: '1050px', maxWidth: '96vw' }"
+          [contentStyle]="{ overflowY: 'visible', maxHeight: '85vh' }"
+          [closable]="true"
+          (onHide)="closeEntryModal()"
+          styleClass="sutram-entry-modal">
+
+  <ng-template pTemplate="header">
+    <div class="entry-modal-header">
+      <div class="entry-header-icon-box" [ngClass]="editingRuleId ? 'icon-box-warning' : 'icon-box-primary'">
+        <i class="pi" [ngClass]="editingRuleId ? 'pi-pencil' : 'pi-plus-circle'"></i>
+      </div>
+      <div class="entry-header-content">
+        <div class="entry-header-title">
+          <span>{{ editingRuleId ? 'Edit Reminder Rule' : 'Create New Reminder' }}</span>
+          <span class="entry-header-hindi">({{ editingRuleId ? 'नियम संपादित करें' : 'नया अनुस्मारक बनाएं' }})</span>
+        </div>
+        <div class="entry-header-subtitle">
+          {{ editingRuleId ? 'Update condition, notification message and schedule settings' : 'Fill in the data condition, notification message and schedule settings' }}
+        </div>
+      </div>
+    </div>
+  </ng-template>
+
+  <!-- ENTRY FORM CONTENT -->
+  <div class="entry-form-body">
+
+    <!-- STEP 1: TYPE SELECTION -->
+    <div class="entry-section-card mb-3">
+      <div class="entry-step-title">
+        <span class="step-num">1</span>
+        <span>रिमाइंडर का प्रकार चुनें (Select Type)</span>
+      </div>
+
+      <div class="type-selector-grid">
+        <div class="type-card"
+             [class.active]="newReminder.reminder_type === 'smart_watchdog'"
+             (click)="setReminderType('smart_watchdog')">
+          <div class="type-icon watchdog-icon">
+            <i class="pi pi-eye"></i>
+          </div>
+          <div class="type-info">
+            <div class="type-title">🎯 Smart Watchdog (डेटा पहरेदार)</div>
+            <div class="type-desc">टेबल और कॉलम की स्थिति पर स्वचालित नजर रखेगा (उदा. Stock &lt; 20, Insurance Expiry)</div>
+          </div>
+          <i class="pi pi-check-circle check-icon" *ngIf="newReminder.reminder_type === 'smart_watchdog'"></i>
+        </div>
+
+        <div class="type-card"
+             [class.active]="newReminder.reminder_type === 'normal'"
+             (click)="setReminderType('normal')">
+          <div class="type-icon alarm-icon">
+            <i class="pi pi-clock"></i>
+          </div>
+          <div class="type-info">
+            <div class="type-title">⏰ Normal Alarm (टास्क अलार्म)</div>
+            <div class="type-desc">निश्चित तारीख या समय पर नोट्स व अलार्म नोटिफिकेशन देने के लिए</div>
+          </div>
+          <i class="pi pi-check-circle check-icon" *ngIf="newReminder.reminder_type === 'normal'"></i>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 2: CONDITION BUILDER (FOR SMART WATCHDOG) -->
+    <div *ngIf="newReminder.reminder_type === 'smart_watchdog'" class="entry-section-card mb-3">
+      <div class="entry-step-title">
+        <span class="step-num">2</span>
+        <span>डेटा शर्त और नियम (Watchdog Condition)</span>
+      </div>
+
+      <!-- 4 Columns in 1 Row with Dependent PrimeNG Dropdowns -->
+      <div class="form-grid-4">
+        <!-- 1. Target Table (Always Searchable) -->
+        <div class="form-group">
+          <label class="form-label">स्रोत तालिका (Target Table) <span class="text-danger">*</span></label>
+          <p-dropdown [options]="tableDropdownOptions"
+                      [(ngModel)]="newReminder.target_table"
+                      (onChange)="onReminderTableChange($event.value)"
+                      optionLabel="label"
+                      optionValue="value"
+                      [filter]="true"
+                      filterBy="label,value"
+                      filterPlaceholder="तालिका खोजें..."
+                      placeholder="-- तालिका चुनें --"
+                      styleClass="sutram-p-dropdown w-100"
+                      [baseZIndex]="30000"
+                      [autoZIndex]="true"
+                      [appendTo]="'body'">
+          </p-dropdown>
+        </div>
+
+        <!-- 2. Target Column (Dependent on Table, Always Searchable) -->
+        <div class="form-group">
+          <label class="form-label">
+            कॉलम (Target Column) <span class="text-danger">*</span>
+            <i *ngIf="isLoadingTargetColumns" class="pi pi-spin pi-spinner ms-1 text-primary"></i>
+          </label>
+          <p-dropdown [options]="columnDropdownOptions"
+                      [(ngModel)]="newReminder.target_column"
+                      (onChange)="onReminderColChange($event.value)"
+                      optionLabel="label"
+                      optionValue="value"
+                      [disabled]="!newReminder.target_table || isLoadingTargetColumns"
+                      [filter]="true"
+                      filterBy="label,value"
+                      filterPlaceholder="कॉलम खोजें..."
+                      placeholder="-- कॉलम चुनें --"
+                      styleClass="sutram-p-dropdown w-100"
+                      [baseZIndex]="30000"
+                      [autoZIndex]="true"
+                      [appendTo]="'body'">
+          </p-dropdown>
+        </div>
+
+        <!-- 3. Operator / Condition (Dependent on Column Datatype) -->
+        <div class="form-group">
+          <label class="form-label">
+            शर्त (Condition) <span class="text-danger">*</span>
+            <span *ngIf="newReminder.col_type" class="badge-col-type ms-1">{{ newReminder.col_type | uppercase }}</span>
+          </label>
+          <p-dropdown [options]="operatorDropdownOptions"
+                      [(ngModel)]="newReminder.operator"
+                      (onChange)="onOperatorChange($event.value)"
+                      optionLabel="label"
+                      optionValue="value"
+                      [disabled]="!newReminder.target_column"
+                      placeholder="-- शर्त चुनें --"
+                      styleClass="sutram-p-dropdown w-100"
+                      [baseZIndex]="30000"
+                      [autoZIndex]="true"
+                      [appendTo]="'body'">
+          </p-dropdown>
+        </div>
+
+        <!-- 4. Threshold / Value (Dependent on Operator) -->
+        <div class="form-group">
+          <label class="form-label">
+            {{ newReminder.col_type === 'date' ? (newReminder.operator === 'before_days' || newReminder.operator === 'after_days' ? 'दिनों की संख्या (Days)' : 'मान') : 'संख्या / मान (Threshold Value)' }}
+          </label>
+
+          <!-- Case A: Number input -->
+          <input *ngIf="newReminder.col_type === 'number'"
+                 type="number"
+                 class="form-control-input"
+                 [disabled]="!newReminder.operator"
+                 [(ngModel)]="newReminder.operand_value"
+                 placeholder="उदा. 20" />
+
+          <!-- Case B: Date days input -->
+          <input *ngIf="newReminder.col_type === 'date' && (newReminder.operator === 'before_days' || newReminder.operator === 'after_days')"
+                 type="number"
+                 class="form-control-input"
+                 [disabled]="!newReminder.operator"
+                 [(ngModel)]="newReminder.date_days"
+                 min="1"
+                 placeholder="दिन (उदा. 15)" />
+
+          <!-- Case C: Date is_past or is_today info pill -->
+          <div *ngIf="newReminder.col_type === 'date' && (newReminder.operator === 'is_past' || newReminder.operator === 'is_today')"
+               class="auto-val-info-badge">
+            <i class="pi pi-check"></i>
+            <span>{{ newReminder.operator === 'is_past' ? 'आज से पुरानी तारीख पर' : 'आज की तारीख पर' }}</span>
+          </div>
+
+          <!-- Case D: Boolean info pill -->
+          <div *ngIf="newReminder.col_type === 'boolean'"
+               class="auto-val-info-badge">
+            <i class="pi pi-check"></i>
+            <span>{{ newReminder.operator === '= 1' ? 'सक्रिय / TRUE' : 'निष्क्रिय / FALSE' }}</span>
+          </div>
+
+          <!-- Case E: Text input -->
+          <input *ngIf="newReminder.col_type !== 'number' && newReminder.col_type !== 'date' && newReminder.col_type !== 'boolean'"
+                 type="text"
+                 class="form-control-input"
+                 [disabled]="!newReminder.operator || newReminder.operator === 'is_empty'"
+                 [(ngModel)]="newReminder.operand_value"
+                 placeholder="मान दर्ज करें..." />
+        </div>
+      </div>
+
+      <!-- Human Explanation Banner -->
+      <div class="explanation-card mt-2">
+        <i class="pi pi-info-circle explanation-icon"></i>
+        <div class="explanation-text">{{ getConditionExplanation() }}</div>
+      </div>
+
+      <!-- Live DB Test Bar -->
+      <div class="live-test-bar">
+        <div class="test-btn-wrapper">
+          <button type="button"
+                  class="btn-test-live"
+                  [disabled]="!newReminder.target_table || !newReminder.target_column || testResultPreview.loading"
+                  (click)="testReminderRuleLive()"
+                  title="Check matching records in active database">
+            <i class="pi" [ngClass]="testResultPreview.loading ? 'pi-spin pi-spinner' : 'pi-bolt'"></i>
+            <span>{{ testResultPreview.loading ? 'जांच जारी है... (Checking...)' : 'Check Live Matching (डेटा जांचें)' }}</span>
+          </button>
+          <span class="test-hint">लाइव डेटाबेस में इस शर्त से कितने रिकॉर्ड्स अभी मैच होते हैं यह तुरंत चेक करें</span>
+        </div>
+
+        <div *ngIf="testResultPreview.tested">
+          <span class="match-badge" [ngClass]="testResultPreview.count > 0 ? 'badge-matched' : 'badge-zero'">
+            <i class="pi" [ngClass]="testResultPreview.count > 0 ? 'pi-exclamation-triangle' : 'pi-check-circle'"></i>
+            {{ testResultPreview.count }} Matching Record(s) Found
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 2B: FOR NORMAL ALARM -->
+    <div *ngIf="newReminder.reminder_type === 'normal'" class="entry-section-card mb-3">
+      <div class="entry-step-title">
+        <span class="step-num">2</span>
+        <span>तारीख, समय व नोट्स (Alarm Time & Notes)</span>
+      </div>
+
+      <div class="form-grid-2">
+        <div class="form-group">
+          <label class="form-label">अलार्म तिथि व समय (Target Date & Time)</label>
+          <input type="datetime-local" class="form-control-input" [(ngModel)]="newReminder.target_datetime" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">नोट्स / विवरण (Notes)</label>
+          <input type="text" class="form-control-input" [(ngModel)]="newReminder.notes" placeholder="उदा. बैंक ड्राफ्ट जमा करना है" />
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 3: NOTIFICATION SETTINGS -->
+    <div class="entry-section-card mb-3">
+      <div class="entry-step-title">
+        <span class="step-num">3</span>
+        <span>संदेश और सूचना सेटिंग्स (Notification & Schedule)</span>
+      </div>
+
+      <div class="form-grid-2 mb-2">
+        <!-- Rule Name -->
+        <div class="form-group">
+          <label class="form-label">रिमाइंडर का नाम (Rule Name)</label>
+          <input type="text" class="form-control-input" [(ngModel)]="newReminder.rule_name" placeholder="उदा. Low Stock Alert या बीमा नवीनीकरण" />
+        </div>
+
+        <!-- Severity Pills -->
+        <div class="form-group">
+          <label class="form-label">अलर्ट गंभीरता (Severity Priority)</label>
+          <div class="severity-pills-row">
+            <div class="sev-pill sev-critical"
+                 [class.active]="newReminder.severity === 'critical'"
+                 (click)="setReminderSeverity('critical')">
+              <i class="pi pi-times-circle"></i>
+              <span>🔴 Critical</span>
+            </div>
+            <div class="sev-pill sev-warning"
+                 [class.active]="newReminder.severity === 'warning'"
+                 (click)="setReminderSeverity('warning')">
+              <i class="pi pi-exclamation-triangle"></i>
+              <span>🟡 Warning</span>
+            </div>
+            <div class="sev-pill sev-info"
+                 [class.active]="newReminder.severity === 'info'"
+                 (click)="setReminderSeverity('info')">
+              <i class="pi pi-info-circle"></i>
+              <span>🔵 Info</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Message Template with Insertable Chips -->
+      <div class="form-group mb-2">
+        <div class="label-with-tools">
+          <label class="form-label">नोटिफिकेशन संदेश टेम्पलेट (Alert Message Template)</label>
+          <div class="token-chips">
+            <span class="token-chip" (click)="insertTokenIntoMessage('name')">+ [name]</span>
+            <span class="token-chip" (click)="insertTokenIntoMessage(newReminder.target_column)">+ [{{ newReminder.target_column || 'column' }}]</span>
+            <span class="token-chip" (click)="insertTokenIntoMessage('count')">+ [count]</span>
+          </div>
+        </div>
+        <input type="text" class="form-control-input" [(ngModel)]="newReminder.message_template" placeholder="उदा. कम स्टॉक अलर्ट: [name] में सिर्फ [qty] शेष है!" />
+      </div>
+
+      <!-- Advanced Frequency & Behavior -->
+      <div class="advanced-settings-grid">
+        <div class="form-group">
+          <label class="form-label">जांच का समय (Check Time)</label>
+          <input type="time" class="form-control-input" [(ngModel)]="newReminder.schedule_time" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">आवृत्ति (Frequency)</label>
+          <p-dropdown [options]="frequencyOptions"
+                      [(ngModel)]="newReminder.frequency"
+                      optionLabel="label"
+                      optionValue="value"
+                      styleClass="sutram-p-dropdown w-100"
+                      [baseZIndex]="30000"
+                      [autoZIndex]="true"
+                      [appendTo]="'body'">
+          </p-dropdown>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">कंप्यूटर रीस्टार्ट (Catch-up)</label>
+          <label class="check-container">
+            <input type="checkbox" [(ngModel)]="newReminder.catch_up_if_missed" />
+            <span class="check-text">🔄 बंद था तो खुलते ही अलर्ट करें</span>
+          </label>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">स्थायित्व (Persistence)</label>
+          <label class="check-container perm-container">
+            <input type="checkbox" [(ngModel)]="newReminder.is_permanent" />
+            <span class="check-text text-danger fw-bold">📌 Permanent (हल होने तक)</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ENTRY MODAL FOOTER -->
+  <ng-template pTemplate="footer">
+    <div class="entry-modal-footer">
+      <button pButton type="button"
+              class="p-button-sm p-button-outlined p-button-secondary"
+              icon="pi pi-refresh"
+              label="Reset Form (रीसेट)"
+              (click)="initDefaultReminder()">
+      </button>
+
+      <div class="footer-right-actions">
+        <button pButton type="button"
+                class="p-button-sm p-button-text p-button-secondary me-2"
+                label="Cancel (रद्द करें)"
+                (click)="closeEntryModal()">
+        </button>
+
+        <button pButton type="button"
+                class="p-button-sm p-button-primary"
+                [icon]="isSaving ? 'pi pi-spin pi-spinner' : 'pi pi-check'"
+                [disabled]="isSaving"
+                [label]="isSaving ? 'सहेजा जा रहा है...' : (editingRuleId ? 'Update Rule (नियम अपडेट करें)' : 'Save Reminder Rule (नियम सहेजें)')"
+                (click)="onSaveClick()">
+        </button>
+      </div>
+    </div>
+  </ng-template>
+
+</p-dialog>

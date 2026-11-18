@@ -1,0 +1,126 @@
+<p-overlayPanel #colConfigOp [dismissable]="true" styleClass="sutram-col-config-popover shadow-lg">
+  <ng-template pTemplate="content">
+    <div class="col-dropdown-menu">
+      <!-- Search Bar -->
+      <div class="col-dd-search-wrap">
+        <i class="pi pi-search col-dd-search-icon"></i>
+        <input type="text"
+               class="col-dd-search-input"
+               placeholder="Search columns / FK..."
+               [(ngModel)]="colSearchQuery" />
+        <button *ngIf="colSearchQuery"
+                type="button"
+                class="btn-clear-search-inline"
+                (click)="colSearchQuery = ''">
+          <i class="pi pi-times"></i>
+        </button>
+      </div>
+
+      <!-- Action Buttons & Dynamic Count -->
+      <div class="col-dd-actions">
+        <div class="col-dd-actions-left">
+          <button type="button" class="col-dd-act-btn" (click)="onSelectAll(true)">All</button>
+          <button type="button" class="col-dd-act-btn" (click)="onSelectAll(false)">None</button>
+          <button type="button" class="col-dd-act-btn" (click)="onReset()">Reset</button>
+        </div>
+        <span class="col-dd-count">{{ selectedVisibleCount }} of {{ allConfigColumns.length }} visible</span>
+      </div>
+
+      <!-- Scrollable List of Items -->
+      <div class="col-dd-body">
+        <!-- 1. Standard Columns -->
+        <ng-container *ngIf="filteredDirectCols.length > 0">
+          <div class="col-dd-section-title">STANDARD COLUMNS</div>
+          <div *ngFor="let col of filteredDirectCols; trackBy: trackByColKey"
+               class="col-dd-item"
+               (click)="onToggleColumn(col.key)">
+            <div class="col-dd-item-left">
+              <input type="checkbox"
+                     class="custom-check"
+                     [checked]="isColumnSelected(col.key)"
+                     style="pointer-events: none;" />
+              <span class="col-dd-item-name" [title]="col.name">
+                {{ col.short_name || col.name }}<span *ngIf="col.not_null" style="color: #ef4444; margin-left: 2px;">*</span>
+              </span>
+            </div>
+            <span class="type-badge">{{ col.type || 'string' }}</span>
+          </div>
+        </ng-container>
+
+        <!-- 2. FK Reference Groups & Computed Groups -->
+        <ng-container *ngIf="filteredFkGroups.length > 0">
+          <div class="col-dd-section-title" style="margin-top: 8px;">FK REFERENCE GROUPS</div>
+          <div *ngFor="let grp of filteredFkGroups; trackBy: trackByGroupName"
+               class="col-dd-group"
+               [class.fk-active-group]="grp.selectedCount > 0">
+            <!-- Group Accordion Header -->
+            <div class="col-dd-group-header">
+              <div class="col-dd-group-left"
+                   (click)="toggleFkGroupExpand(grp.name)"
+                   style="cursor: pointer; flex-grow: 1;">
+                <i class="pi pi-chevron-down fk-expand-toggle"
+                   [class.rotated]="!isFkGroupExpanded(grp.name)"></i>
+                <span class="col-dd-item-name">
+                  <i class="pi pi-link" style="color: var(--primary, #4f46e5); font-size: 10px; margin-right: 3px;"></i>
+                  <strong style="text-transform: capitalize;">{{ grp.name }}</strong>
+                  <span style="font-size: 10px; color: var(--text-muted); font-weight: 400; margin-left: 3px;">({{ grp.refTable }})</span>
+                </span>
+              </div>
+              <div class="col-dd-group-right"
+                   (click)="onToggleFkGroupAll(grp.name)"
+                   style="cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                <input type="checkbox"
+                       class="custom-check"
+                       [checked]="grp.isAllChecked"
+                       style="pointer-events: none;" />
+                <span class="fk-group-pill"
+                      [style.background]="grp.selectedCount > 0 ? 'rgba(16, 185, 129, 0.12)' : 'rgba(125, 125, 125, 0.1)'"
+                      [style.color]="grp.selectedCount > 0 ? '#059669' : 'var(--text-muted)'">
+                  {{ grp.selectedCount }}/{{ grp.totalCount }}
+                </span>
+              </div>
+            </div>
+
+            <!-- Group Sub-items (when expanded) -->
+            <div *ngIf="isFkGroupExpanded(grp.name)" class="col-dd-group-items">
+              <div *ngFor="let col of grp.columns; trackBy: trackByColKey"
+                   class="col-dd-item"
+                   (click)="onToggleColumn(col.key)">
+                <div class="col-dd-item-left">
+                  <input type="checkbox"
+                         class="custom-check"
+                         [checked]="isColumnSelected(col.key)"
+                         style="pointer-events: none;" />
+                  <span class="col-dd-item-name"
+                        [style.font-weight]="col.is_fk_main ? '600' : 'normal'"
+                        [title]="col.name">
+                    {{ col.short_name || col.name }}
+                  </span>
+                </div>
+                <span class="type-badge">{{ col.is_fk_main ? 'display' : (col.is_fk_raw ? 'id' : (col.is_temp ? 'formula' : (col.type || 'string'))) }}</span>
+              </div>
+            </div>
+          </div>
+        </ng-container>
+
+        <!-- Empty State -->
+        <div *ngIf="filteredDirectCols.length === 0 && filteredFkGroups.length === 0" class="col-dd-empty">
+          <i class="pi pi-search me-1"></i> No matching columns found
+        </div>
+      </div>
+
+      <!-- Footer: Legacy Escape Hint + Done Button -->
+      <div class="col-dd-footer">
+        <span class="small text-muted" style="font-size: 11px;">
+          Click outside or press Esc
+        </span>
+        <button type="button"
+                class="btn btn-sm btn-outline-secondary py-0 px-2"
+                style="font-size: 11.5px; font-weight: 500;"
+                (click)="hide()">
+          Done
+        </button>
+      </div>
+    </div>
+  </ng-template>
+</p-overlayPanel>

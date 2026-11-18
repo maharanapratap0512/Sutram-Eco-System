@@ -1,0 +1,759 @@
+<div class="in-sheet-workbench shadow-sm" [class.dark-mode]="isDarkMode" *ngIf="tool">
+  <!-- Top Bar: Tool Title, Context Info, Actions & Close Button -->
+  <div class="workbench-header">
+    <div class="workbench-title-group">
+      <i class="pi"
+         [ngClass]="tool === 'ui_sutras' ? 'pi-calculator text-primary' : (tool === 'db_triggers' ? 'pi-bolt text-warning' : 'pi-bell text-warning')"
+         style="font-size: 15px;"></i>
+      <span class="workbench-title">
+        {{ tool === 'ui_sutras' ? 'UI सूत्र विन्यास (Reactive Formulas)' : (tool === 'db_triggers' ? 'बैकएंड डेटाबेस ट्रिगर्स (Server Triggers)' : 'स्मार्ट अनुस्मारक एवं वॉचडॉग (Smart Reminders & Watchdog)') }}
+      </span>
+      <span class="sheet-target-badge">
+        <i class="pi pi-table me-1"></i>{{ tableTitle || tableName || 'तालिका' }}
+      </span>
+      <span *ngIf="!isAdmin" class="view-only-badge">
+        <i class="pi pi-lock me-1"></i>View Only
+      </span>
+    </div>
+
+    <div class="workbench-actions-group">
+      <button *ngIf="tool === 'ui_sutras' && isAdmin"
+              type="button"
+              class="btn-workbench btn-workbench-primary"
+              [disabled]="isSavingUiSutras"
+              (click)="onSaveUiSutrasClick()">
+        <i class="pi" [ngClass]="isSavingUiSutras ? 'pi-spin pi-spinner' : 'pi-check'"></i>
+        <span>{{ isSavingUiSutras ? 'Saving...' : 'सेव करें (Save)' }}</span>
+      </button>
+
+      <button type="button"
+              class="btn-workbench btn-workbench-close"
+              (click)="onCloseClick()"
+              title="Close Workbench & View Full Sheet">
+        <i class="pi pi-times"></i>
+        <span>Done (✕)</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- ── 1. UI SUTRAS WORKBENCH (Spreadsheet Sub-Table Experience) ── -->
+  <div *ngIf="tool === 'ui_sutras'" class="workbench-body">
+    <!-- Compact Add Formula Bar (When Admin) -->
+    <div class="sutra-add-card" *ngIf="isAdmin">
+      <div class="workbench-toolbar-row">
+        <!-- Target Column Dropdown -->
+        <div class="wb-field-wrap wb-col-picker">
+          <label class="workbench-lbl"><i class="pi pi-table me-1"></i>Target Column:</label>
+          <p-dropdown [options]="targetColOptions"
+                      [(ngModel)]="selectedTargetColValue"
+                      (onChange)="onTargetColChange($event)"
+                      optionLabel="label"
+                      optionValue="value"
+                      placeholder="-- Select Column --"
+                      styleClass="workbench-dropdown"
+                      [appendTo]="'body'">
+          </p-dropdown>
+        </div>
+
+        <!-- Display Name (if Temp Column) -->
+        <div *ngIf="newUiSutra.is_temp" class="wb-field-wrap wb-title-picker">
+          <label class="workbench-lbl text-primary"><i class="pi pi-tag me-1"></i>Display Title:</label>
+          <input type="text"
+                 pInputText
+                 class="workbench-inp"
+                 [(ngModel)]="newUiSutra.display_name"
+                 placeholder="e.g. Total, Margin" />
+        </div>
+
+        <!-- Formula Input (with fx badge) -->
+        <div class="wb-field-wrap wb-formula-picker">
+          <label class="workbench-lbl"><i class="pi pi-calculator me-1"></i>Formula Expression:</label>
+          <div class="formula-inp-container">
+            <span class="formula-fx-pill">fx</span>
+            <input type="text"
+                   pInputText
+                   class="workbench-inp font-mono formula-text-field"
+                   [(ngModel)]="newUiSutra.formula"
+                   placeholder="e.g. [colA] + [colB] or AGE([dob])" />
+          </div>
+        </div>
+
+        <!-- Add Button -->
+        <div class="wb-btn-wrap">
+          <button type="button"
+                  class="btn-workbench btn-workbench-add"
+                  [disabled]="!selectedTargetColValue || !newUiSutra.formula?.trim() || (newUiSutra.is_temp && !newUiSutra.display_name?.trim())"
+                  (click)="onAddUiSutraClick()"
+                  title="Add formula to this table">
+            <i class="pi pi-plus me-1"></i>Add Formula
+          </button>
+        </div>
+      </div>
+
+      <!-- Quick Chips: Table Columns & Functions -->
+      <div class="workbench-chips-wrap">
+        <span class="chips-lbl"><i class="pi pi-bolt me-1"></i>Quick Insert:</span>
+        <span *ngFor="let col of currentTableColumns"
+              class="wb-chip wb-chip-col"
+              (click)="insertColIntoFormula(col.name || col.col_name)"
+              title="Add column to formula">
+          + [{{ col.name || col.col_name }}]
+        </span>
+        <ng-container *ngIf="referenceColumns.length > 0">
+          <span *ngFor="let rc of referenceColumns"
+                class="wb-chip wb-chip-ref"
+                (click)="insertColIntoFormula(rc.name || rc.key)"
+                title="Add reference column to formula">
+            + [{{ rc.name || rc.key }}]
+          </span>
+        </ng-container>
+        <span class="chips-sep">|</span>
+        <span class="wb-chip wb-chip-fn" (click)="insertFnIntoFormula('AGE([dob])')">+ AGE(d)</span>
+        <span class="wb-chip wb-chip-fn" (click)="insertFnIntoFormula('DAYS([end_date], [start_date])')">+ DAYS(d1, d2)</span>
+        <span class="wb-chip wb-chip-fn" (click)="insertFnIntoFormula('IF([condition], a, b)')">+ IF(c, a, b)</span>
+        <span class="wb-chip wb-chip-fn" (click)="insertFnIntoFormula('ROUND([val], 2)')">+ ROUND(n, 2)</span>
+      </div>
+    </div>
+
+    <!-- Active Formulas Sub-Table (Native PrimeNG Table) -->
+    <div class="workbench-table-wrap">
+      <div *ngIf="uiSutrasList.length === 0" class="workbench-empty">
+        <i class="pi pi-info-circle me-1"></i> अभी इस तालिका में कोई UI सूत्र नहीं है। ऊपर दिए गए फॉर्म से नया सूत्र जोड़ें।
+      </div>
+
+      <p-table *ngIf="uiSutrasList.length > 0"
+               [value]="uiSutrasList"
+               styleClass="p-datatable-sm p-datatable-striped workbench-p-table"
+               [responsive]="true">
+        <ng-template pTemplate="header">
+          <tr>
+            <th style="width: 40px;" class="text-center">#</th>
+            <th style="width: 120px;">Type (प्रकार)</th>
+            <th style="width: 200px;">Target Column</th>
+            <th>Formula / Calculation Code</th>
+            <th style="width: 60px;" class="text-center" *ngIf="isAdmin">Action</th>
+          </tr>
+        </ng-template>
+        <ng-template pTemplate="body" let-s let-idx="rowIndex">
+          <tr>
+            <td class="text-center text-muted font-mono" style="font-size: 11px;">{{ idx + 1 }}</td>
+            <td>
+              <p-tag [value]="s.is_temp ? 'Temp (fx)' : 'DB Column'"
+                     [severity]="s.is_temp ? 'info' : 'success'"
+                     [rounded]="true">
+              </p-tag>
+            </td>
+            <td class="font-mono" style="font-size: 11.5px; font-weight: 600;">
+              {{ s.display_name || s.target_col }}
+              <span *ngIf="s.is_temp && s.target_col" class="text-muted" style="font-size: 10px; font-weight: normal;">({{ s.target_col }})</span>
+            </td>
+            <td class="font-mono text-primary" style="font-size: 12px; font-weight: 600;">
+              {{ s.formula }}
+            </td>
+            <td class="text-center" *ngIf="isAdmin">
+              <button type="button"
+                      class="btn-row-del"
+                      (click)="onRemoveUiSutraClick(idx)"
+                      title="Delete Formula">
+                <i class="pi pi-trash"></i>
+              </button>
+            </td>
+          </tr>
+        </ng-template>
+      </p-table>
+    </div>
+  </div>
+
+  <!-- ── 2. DB TRIGGERS WORKBENCH (Rich Visual Editor) ── -->
+  <div *ngIf="tool === 'db_triggers'" class="workbench-body">
+    <!-- Trigger Creator Card (When Admin) -->
+    <div class="sutra-add-card" *ngIf="isAdmin">
+      <div class="workbench-toolbar-row">
+        <!-- Trigger Identifier -->
+        <div class="wb-field-wrap" style="flex: 0 0 200px;">
+          <label class="workbench-lbl"><i class="pi pi-id-card me-1"></i>Trigger Name:</label>
+          <input type="text"
+                 pInputText
+                 class="workbench-inp font-mono"
+                 [(ngModel)]="newTriggerDef.trigger_name"
+                 placeholder="e.g. trg_stock_update" />
+        </div>
+
+        <!-- Event Dropdown -->
+        <div class="wb-field-wrap" style="flex: 0 0 130px;">
+          <label class="workbench-lbl"><i class="pi pi-clock me-1"></i>Event:</label>
+          <p-dropdown [options]="triggerEventOptions"
+                      [(ngModel)]="newTriggerDef.event"
+                      styleClass="workbench-dropdown"
+                      [appendTo]="'body'">
+          </p-dropdown>
+        </div>
+
+        <!-- Action Type Dropdown -->
+        <div class="wb-field-wrap" style="flex: 0 0 180px;">
+          <label class="workbench-lbl"><i class="pi pi-cog me-1"></i>Action Type:</label>
+          <p-dropdown [options]="triggerActionOptions"
+                      [(ngModel)]="newTriggerDef.action_type"
+                      styleClass="workbench-dropdown"
+                      [appendTo]="'body'">
+          </p-dropdown>
+        </div>
+
+        <!-- Target Table (When non-raw SQL) -->
+        <div *ngIf="newTriggerDef.action_type !== 'raw_sql'" class="wb-field-wrap" style="flex: 0 0 180px;">
+          <label class="workbench-lbl"><i class="pi pi-table me-1"></i>Target Table:</label>
+          <p-dropdown [options]="tablesList"
+                      [(ngModel)]="newTriggerDef.target_table"
+                      optionLabel="display_name"
+                      optionValue="table"
+                      placeholder="-- Target Table --"
+                      styleClass="workbench-dropdown"
+                      [appendTo]="'body'">
+          </p-dropdown>
+        </div>
+
+        <!-- Create Button -->
+        <div class="wb-btn-wrap">
+          <button type="button"
+                  class="btn-workbench btn-workbench-warning"
+                  [disabled]="!newTriggerDef.trigger_name || (newTriggerDef.action_type === 'raw_sql' && !newTriggerDef.raw_sql?.trim())"
+                  (click)="onCreateTriggerClick()">
+            <i class="pi pi-bolt me-1"></i>Create Trigger
+          </button>
+        </div>
+      </div>
+
+      <!-- Raw SQL Textarea -->
+      <div *ngIf="newTriggerDef.action_type === 'raw_sql'" class="mt-2">
+        <div class="d-flex justify-content-between align-items-center mb-1">
+          <label class="workbench-lbl mb-0"><i class="pi pi-code me-1"></i>SQL Query (Raw SQL):</label>
+          <span class="wb-sql-hint">
+            New value: <code>:new.col</code> | Old value: <code>:old.col</code>
+          </span>
+        </div>
+        <textarea rows="2"
+                  class="workbench-textarea font-mono"
+                  [(ngModel)]="newTriggerDef.raw_sql"
+                  placeholder="UPDATE target_table SET col = col + :new.qty WHERE id = :new.target_id;"></textarea>
+
+        <!-- Columns & Tables Chips -->
+        <div class="workbench-chips-wrap">
+          <span class="chips-lbl"><i class="pi pi-table me-1"></i>Columns:</span>
+          <span *ngFor="let h of visibleHeaders"
+                class="wb-chip wb-chip-new"
+                (click)="insertColIntoTriggerSql(h.name || h.key, ':new.')">
+            +:new.{{ h.name || h.key }}
+          </span>
+          <ng-container *ngIf="newTriggerDef.event !== 'INSERT'">
+            <span *ngFor="let h of visibleHeaders"
+                  class="wb-chip wb-chip-old"
+                  (click)="insertColIntoTriggerSql(h.name || h.key, ':old.')">
+              +:old.{{ h.name || h.key }}
+            </span>
+          </ng-container>
+          <span class="chips-sep">|</span>
+          <span class="chips-lbl"><i class="pi pi-database me-1"></i>Tables:</span>
+          <span *ngFor="let t of tablesList"
+                class="wb-chip wb-chip-col"
+                (click)="insertTextIntoTriggerSql(t.table)">
+            {{ t.table }}
+          </span>
+        </div>
+      </div>
+
+      <!-- Non-Raw-SQL Field Mapping Row -->
+      <div *ngIf="newTriggerDef.action_type !== 'raw_sql'" class="mt-2">
+        <label class="workbench-lbl"><i class="pi pi-sliders-h me-1"></i>Field Mapping JSON:</label>
+        <input type="text"
+               pInputText
+               class="workbench-inp font-mono"
+               [(ngModel)]="newTriggerDef.field_map_str"
+               placeholder='{"target_col": ":new.source_col"}' />
+      </div>
+    </div>
+
+    <!-- Active Triggers Table (Native PrimeNG Table) -->
+    <div class="workbench-table-wrap">
+      <div *ngIf="dbTriggersList.length === 0" class="workbench-empty">
+        <i class="pi pi-info-circle me-1"></i> अभी इस तालिका में कोई बैकएंड ट्रिगर सक्रिय नहीं है। ऊपर दिए गए फॉर्म से नया ट्रिगर बनाएं।
+      </div>
+
+      <p-table *ngIf="dbTriggersList.length > 0"
+               [value]="dbTriggersList"
+               styleClass="p-datatable-sm p-datatable-striped workbench-p-table"
+               [responsive]="true">
+        <ng-template pTemplate="header">
+          <tr>
+            <th style="width: 40px;" class="text-center">#</th>
+            <th style="width: 180px;">Trigger Name</th>
+            <th style="width: 100px;" class="text-center">Event</th>
+            <th style="width: 120px;" class="text-center">Type</th>
+            <th>Action / SQL Statement</th>
+            <th style="width: 60px;" class="text-center" *ngIf="isAdmin">Action</th>
+          </tr>
+        </ng-template>
+        <ng-template pTemplate="body" let-t let-idx="rowIndex">
+          <tr>
+            <td class="text-center text-muted font-mono" style="font-size: 11px;">{{ idx + 1 }}</td>
+            <td class="font-mono" style="font-size: 12px; font-weight: 700;">{{ t.trigger_name }}</td>
+            <td class="text-center">
+              <p-tag [value]="t.event"
+                     [severity]="t.event === 'INSERT' ? 'success' : (t.event === 'UPDATE' ? 'info' : 'danger')"
+                     [rounded]="true">
+              </p-tag>
+            </td>
+            <td class="text-center font-mono" style="font-size: 11px;">
+              {{ (t.actions && t.actions[0]?.action_type) || t.action_type || 'raw_sql' }}
+            </td>
+            <td class="font-mono text-muted" style="font-size: 11px;">
+              <code *ngIf="t.actions && t.actions[0]?.raw_sql" style="color: var(--primary, #4f46e5);">
+                {{ t.actions[0]?.raw_sql }}
+              </code>
+              <span *ngIf="!t.actions || !t.actions[0]?.raw_sql">
+                {{ t.target_table || (t.actions && t.actions[0]?.target_table) || 'Standard Action' }}
+              </span>
+            </td>
+            <td class="text-center" *ngIf="isAdmin">
+              <button type="button"
+                      class="btn-row-del"
+                      (click)="onDeleteTriggerClick(t._id)"
+                      title="Delete Trigger">
+                <i class="pi pi-trash"></i>
+              </button>
+            </td>
+          </tr>
+        </ng-template>
+      </p-table>
+    </div>
+  </div>
+
+  <!-- ── 3. REMINDERS & SMART WATCHDOG WORKBENCH ── -->
+  <div *ngIf="tool === 'reminders'" class="workbench-body reminders-workbench-body">
+    <!-- Top Sub-Navigation Row -->
+    <div class="reminders-tab-nav-row">
+      <div class="nav-pills-group">
+        <button type="button"
+                class="wb-nav-pill"
+                [class.active]="reminderViewMode === 'create'"
+                (click)="setReminderViewMode('create')">
+          <i class="pi pi-plus-circle me-1"></i>
+          <span>{{ editingRuleId ? 'नियम संपादित करें (Edit Rule)' : 'नया रिमाइंडर बनाएं (New Reminder)' }}</span>
+        </button>
+        <button type="button"
+                class="wb-nav-pill"
+                [class.active]="reminderViewMode === 'list'"
+                (click)="setReminderViewMode('list')">
+          <i class="pi pi-list me-1"></i>
+          <span>सक्रिय रिमाइंडर (All Reminders) ({{ reminderRulesList.length }})</span>
+        </button>
+      </div>
+
+      <div class="nav-actions-right">
+        <button type="button"
+                class="btn-workbench btn-workbench-outline"
+                (click)="evaluateAllReminders.emit()"
+                title="Force evaluate all rules against live database now">
+          <i class="pi pi-refresh me-1"></i>
+          <span>डेटाबेस चेक करें (Check DB)</span>
+        </button>
+        <button type="button"
+                class="btn-workbench btn-workbench-outline"
+                (click)="openFullSheet.emit()"
+                title="View in full native spreadsheet tab">
+          <i class="pi pi-table me-1"></i>
+          <span>पूरी शीट देखें (Full Sheet)</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- VIEW A: CREATE / EDIT REMINDER BUILDER -->
+    <div *ngIf="reminderViewMode === 'create'" class="reminder-builder-card">
+      <!-- 1. Type Switcher Cards -->
+      <div class="reminder-type-cards-row">
+        <div class="reminder-type-card"
+             [class.active]="newReminder.reminder_type === 'smart_watchdog'"
+             (click)="setReminderType('smart_watchdog')">
+          <div class="type-card-icon"><i class="pi pi-bolt text-warning"></i></div>
+          <div class="type-card-info">
+            <div class="type-card-title">🎯 स्मार्ट वॉचडॉग (Smart Table Watchdog)</div>
+            <div class="type-card-desc">डेटाबेस तालिका में किसी शर्त पर अलर्ट (उदा. स्टॉक &lt; 20, वाहन बीमा 15 दिन में समाप्त)</div>
+          </div>
+        </div>
+
+        <div class="reminder-type-card"
+             [class.active]="newReminder.reminder_type === 'normal'"
+             (click)="setReminderType('normal')">
+          <div class="type-card-icon"><i class="pi pi-clock text-primary"></i></div>
+          <div class="type-card-info">
+            <div class="type-card-title">⏰ सामान्य अलार्म (Normal Date/Time Reminder)</div>
+            <div class="type-card-desc">तय तारीख और समय पर कोई कार्य याद दिलाना (उदा. पार्टी पेमेंट फॉलोअप)</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. Form Fields (Condition & Target) -->
+      <div class="reminder-form-grid">
+        <!-- Rule Name (Common) -->
+        <div class="wb-field-wrap rule-name-wrap">
+          <label class="workbench-lbl"><i class="pi pi-tag me-1"></i>अनुस्मारक का नाम (Rule Name):</label>
+          <input type="text"
+                 pInputText
+                 class="workbench-inp"
+                 [(ngModel)]="newReminder.rule_name"
+                 placeholder="e.g. Low Stock Alert, Vehicle Insurance Expiry" />
+        </div>
+
+        <!-- SMART WATCHDOG SPECIFIC FIELDS -->
+        <ng-container *ngIf="newReminder.reminder_type === 'smart_watchdog'">
+          <!-- Target Table Dropdown -->
+          <div class="wb-field-wrap table-select-wrap">
+            <label class="workbench-lbl"><i class="pi pi-table me-1"></i>तालिका (Table):</label>
+            <p-dropdown [options]="tablesList"
+                        [(ngModel)]="newReminder.target_table"
+                        (onChange)="onReminderTableChange($event)"
+                        optionLabel="display_name"
+                        optionValue="table"
+                        placeholder="-- तालिका चुनें --"
+                        styleClass="workbench-dropdown"
+                        [appendTo]="'body'">
+            </p-dropdown>
+          </div>
+
+          <!-- Target Column Dropdown -->
+          <div class="wb-field-wrap col-select-wrap">
+            <label class="workbench-lbl">
+              <i class="pi pi-sliders-h me-1"></i>कॉलम (Column):
+              <i *ngIf="isLoadingTargetColumns" class="pi pi-spin pi-spinner ms-1 text-primary"></i>
+            </label>
+            <p-dropdown [options]="availableTargetColumns"
+                        [(ngModel)]="newReminder.target_column"
+                        (onChange)="onReminderColChange($event.value)"
+                        optionLabel="label"
+                        optionValue="name"
+                        placeholder="-- कॉलम चुनें --"
+                        styleClass="workbench-dropdown"
+                        [appendTo]="'body'">
+              <ng-template let-col pTemplate="item">
+                <div class="d-flex align-items-center gap-2">
+                  <span class="col-type-tag" [class.type-num]="col.type === 'number'" [class.type-date]="col.type === 'date'">
+                    {{ col.type === 'number' ? '#' : (col.type === 'date' ? '📅' : 'T') }}
+                  </span>
+                  <span>{{ col.label || col.name }}</span>
+                </div>
+              </ng-template>
+            </p-dropdown>
+          </div>
+
+          <!-- Adaptive Operator & Value (Based on Datatype!) -->
+          <div class="wb-field-wrap condition-operator-wrap">
+            <label class="workbench-lbl"><i class="pi pi-filter me-1"></i>शर्त (Condition):</label>
+
+            <!-- Case A: Number Column -->
+            <div *ngIf="newReminder.col_type === 'number'" class="d-flex gap-2 align-items-center">
+              <p-dropdown [options]="numberOperatorOptions"
+                          [(ngModel)]="newReminder.operator"
+                          styleClass="workbench-dropdown flex-grow-1"
+                          [appendTo]="'body'">
+              </p-dropdown>
+              <input type="number"
+                     pInputText
+                     class="workbench-inp font-mono"
+                     style="width: 100px;"
+                     [(ngModel)]="newReminder.operand_value"
+                     placeholder="Value (e.g. 20)" />
+            </div>
+
+            <!-- Case B: Date Column -->
+            <div *ngIf="newReminder.col_type === 'date'" class="d-flex gap-2 align-items-center">
+              <p-dropdown [options]="dateConditionOptions"
+                          [(ngModel)]="newReminder.date_condition_type"
+                          styleClass="workbench-dropdown flex-grow-1"
+                          [appendTo]="'body'">
+              </p-dropdown>
+              <div *ngIf="newReminder.date_condition_type === 'before_days' || newReminder.date_condition_type === 'after_days'"
+                   class="d-flex align-items-center gap-1">
+                <input type="number"
+                       pInputText
+                       class="workbench-inp font-mono"
+                       style="width: 75px;"
+                       [(ngModel)]="newReminder.date_days"
+                       placeholder="15" />
+                <span class="text-muted" style="font-size: 11px;">दिन</span>
+              </div>
+            </div>
+
+            <!-- Case C: String / Text Column -->
+            <div *ngIf="newReminder.col_type !== 'number' && newReminder.col_type !== 'date'" class="d-flex gap-2 align-items-center">
+              <p-dropdown [options]="stringOperatorOptions"
+                          [(ngModel)]="newReminder.operator"
+                          styleClass="workbench-dropdown flex-grow-1"
+                          [appendTo]="'body'">
+              </p-dropdown>
+              <input type="text"
+                     pInputText
+                     class="workbench-inp font-mono"
+                     style="width: 130px;"
+                     [(ngModel)]="newReminder.operand_value"
+                     placeholder="Value" />
+            </div>
+          </div>
+        </ng-container>
+
+        <!-- NORMAL ALARM SPECIFIC FIELDS -->
+        <ng-container *ngIf="newReminder.reminder_type === 'normal'">
+          <div class="wb-field-wrap">
+            <label class="workbench-lbl"><i class="pi pi-calendar me-1"></i>तारीख एवं समय (Target Date & Time):</label>
+            <input type="datetime-local"
+                   class="workbench-inp font-mono"
+                   [(ngModel)]="newReminder.target_datetime" />
+          </div>
+          <div class="wb-field-wrap" style="grid-column: span 2;">
+            <label class="workbench-lbl"><i class="pi pi-comment me-1"></i>विवरण / नोट्स (Notes):</label>
+            <input type="text"
+                   pInputText
+                   class="workbench-inp"
+                   [(ngModel)]="newReminder.notes"
+                   placeholder="e.g. Call Sharmaji for GST return invoice clearance" />
+          </div>
+        </ng-container>
+      </div>
+
+      <!-- Human-Readable Condition Explanation Banner -->
+      <div class="condition-explanation-box">
+        <i class="pi pi-info-circle text-primary me-2"></i>
+        <span class="explanation-text">{{ getConditionExplanation() }}</span>
+      </div>
+
+      <!-- 3. Severity, Frequency, Permanent & Missed Catch-up Options -->
+      <div class="reminder-options-row">
+        <!-- Severity Radios / Buttons -->
+        <div class="wb-field-wrap">
+          <label class="workbench-lbl"><i class="pi pi-shield me-1"></i>अलर्ट प्राथमिकता (Severity):</label>
+          <div class="severity-pills-group">
+            <button type="button"
+                    class="sev-pill sev-info"
+                    [class.active]="newReminder.severity === 'info'"
+                    (click)="setReminderSeverity('info')">
+              ℹ️ सामान्य (Info)
+            </button>
+            <button type="button"
+                    class="sev-pill sev-warning"
+                    [class.active]="newReminder.severity === 'warning'"
+                    (click)="setReminderSeverity('warning')">
+              ⚠️ चेतावनी (Warning)
+            </button>
+            <button type="button"
+                    class="sev-pill sev-critical"
+                    [class.active]="newReminder.severity === 'critical'"
+                    (click)="setReminderSeverity('critical')">
+              🚨 गंभीर (Critical)
+            </button>
+          </div>
+        </div>
+
+        <!-- Schedule Time -->
+        <div class="wb-field-wrap">
+          <label class="workbench-lbl"><i class="pi pi-clock me-1"></i>चेक करने का समय (Time):</label>
+          <input type="time"
+                 class="workbench-inp font-mono"
+                 style="width: 110px;"
+                 [(ngModel)]="newReminder.schedule_time" />
+        </div>
+
+        <!-- Frequency -->
+        <div class="wb-field-wrap">
+          <label class="workbench-lbl"><i class="pi pi-sync me-1"></i>आवृत्ति (Frequency):</label>
+          <p-dropdown [options]="frequencyOptions"
+                      [(ngModel)]="newReminder.frequency"
+                      styleClass="workbench-dropdown"
+                      [appendTo]="'body'">
+          </p-dropdown>
+        </div>
+
+        <!-- Permanent Always on Top Checkbox -->
+        <div class="wb-field-wrap checkbox-wrap">
+          <label class="wb-checkbox-label" title="Cannot be dismissed until data condition resolves in database">
+            <input type="checkbox" [(ngModel)]="newReminder.is_permanent" />
+            <span class="font-bold text-danger">📌 स्थायी अलर्ट (Permanent Alert)</span>
+          </label>
+          <span class="sub-hint">डेटा ठीक होने तक हमेशा ऊपर दिखेगा।</span>
+        </div>
+
+        <!-- Missed Catch Up Checkbox -->
+        <div class="wb-field-wrap checkbox-wrap">
+          <label class="wb-checkbox-label" title="If app was closed at scheduled time, remind immediately on startup">
+            <input type="checkbox" [(ngModel)]="newReminder.catch_up_if_missed" />
+            <span>☑️ मिस होने पर स्टार्ट पर याद दिलाएं</span>
+          </label>
+          <span class="sub-hint">ऐप बंद रहने पर अगले स्टार्ट पर मिस नहीं होगा।</span>
+        </div>
+      </div>
+
+      <!-- 4. Notification Message Template (with Quick Insert Chips) -->
+      <div class="message-template-card">
+        <label class="workbench-lbl"><i class="pi pi-envelope me-1"></i>नोटिफिकेशन संदेश (Message Template):</label>
+        <input type="text"
+               pInputText
+               class="workbench-inp font-mono"
+               [(ngModel)]="newReminder.message_template"
+               placeholder="e.g. Warning: Low stock on [name]: only [quantity] remaining!" />
+
+        <!-- Quick Insert Token Chips -->
+        <div *ngIf="newReminder.reminder_type === 'smart_watchdog' && availableTargetColumns.length > 0" class="chips-row">
+          <span class="chips-label">कॉलम टोकन जोड़ें:</span>
+          <span *ngFor="let col of availableTargetColumns.slice(0, 8)"
+                class="wb-chip wb-chip-col"
+                (click)="insertTokenIntoMessage(col.name)">
+            + [{{ col.name }}]
+          </span>
+        </div>
+      </div>
+
+      <!-- 5. Live DB Test Preview Box -->
+      <div *ngIf="testResultPreview.tested" class="test-preview-box"
+           [class.box-matched]="testResultPreview.count > 0"
+           [class.box-zero]="testResultPreview.count === 0"
+           [class.box-error]="testResultPreview.hasError">
+        <div class="test-preview-header">
+          <i class="pi" [ngClass]="testResultPreview.hasError ? 'pi-times-circle text-danger' : (testResultPreview.count > 0 ? 'pi-check-circle text-warning' : 'pi-info-circle text-muted')"></i>
+          <strong>
+            {{ testResultPreview.hasError ? 'टेस्ट त्रुटि (Test Error)' : (testResultPreview.count > 0 ? '✓ वर्तमान डेटाबेस में ' + testResultPreview.count + ' रिकॉर्ड्स इस शर्त से मेल खाते हैं:' : 'वर्तमान डेटाबेस में अभी कोई रिकॉर्ड इस शर्त से मेल नहीं खाता (0 matching records right now)') }}
+          </strong>
+        </div>
+        <div *ngIf="testResultPreview.message" class="test-preview-msg">
+          {{ testResultPreview.message }}
+        </div>
+        <div *ngIf="testResultPreview.sampleRecords && testResultPreview.sampleRecords.length > 0" class="test-sample-pills">
+          <span *ngFor="let s of testResultPreview.sampleRecords.slice(0, 5)" class="sample-pill">
+            {{ s.name || s.item_name || s.title || s.rule_name || ('ID: ' + s._id) }}
+            <span *ngIf="s[newReminder.target_column] !== undefined" class="sample-val">
+              ({{ newReminder.target_column }}: {{ s[newReminder.target_column] }})
+            </span>
+          </span>
+        </div>
+        <div *ngIf="testResultPreview.hasError" class="test-error-text">
+          {{ testResultPreview.errorText }}
+        </div>
+      </div>
+
+      <!-- 6. Action Buttons Bar -->
+      <div class="reminder-builder-actions">
+        <button type="button"
+                class="btn-workbench btn-workbench-test"
+                [disabled]="testResultPreview.loading"
+                (click)="testReminderRuleLive()"
+                title="Test condition on current database records">
+          <i class="pi" [ngClass]="testResultPreview.loading ? 'pi-spin pi-spinner' : 'pi-bolt'"></i>
+          <span>{{ testResultPreview.loading ? 'Testing...' : '🧪 लाइव डेटा टेस्ट करें (Test DB)' }}</span>
+        </button>
+
+        <div class="d-flex gap-2">
+          <button *ngIf="editingRuleId"
+                  type="button"
+                  class="btn-workbench btn-workbench-outline"
+                  (click)="resetReminderForm()">
+            रद्द करें (Cancel)
+          </button>
+
+          <button type="button"
+                  class="btn-workbench btn-workbench-save"
+                  (click)="onSaveReminderClick()"
+                  title="Save reminder rule to database">
+            <i class="pi pi-check me-1"></i>
+            <span>{{ editingRuleId ? 'परिवर्तन सुरक्षित करें (Update)' : 'रिमाइंडर सेव करें (Save Reminder)' }}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW B: ALL REMINDERS LIST (Visual Cards Grid) -->
+    <div *ngIf="reminderViewMode === 'list'" class="reminders-list-container">
+      <div *ngIf="reminderRulesList.length === 0" class="reminders-empty-state">
+        <i class="pi pi-bell text-muted" style="font-size: 28px;"></i>
+        <div class="empty-title">अभी कोई रिमाइंडर नियम कॉन्फ़िगर नहीं किया गया है</div>
+        <div class="empty-sub">स्टॉक कम होने, बिल बकाया, या तारीख पर याद दिलाने के लिए ऊपर नया रिमाइंडर बनाएं।</div>
+        <button type="button" class="btn-workbench btn-workbench-save mt-2" (click)="setReminderViewMode('create')">
+          <i class="pi pi-plus me-1"></i>नया रिमाइंडर बनाएं (Create Now)
+        </button>
+      </div>
+
+      <div *ngIf="reminderRulesList.length > 0" class="reminders-cards-grid">
+        <div *ngFor="let r of reminderRulesList"
+             class="reminder-rule-card shadow-sm"
+             [class.card-critical]="r.severity === 'critical' || r.is_permanent === 1"
+             [class.card-warning]="r.severity === 'warning'"
+             [class.card-info]="r.severity === 'info'"
+             [class.card-inactive]="r.active === 0 || r.active === false">
+
+          <!-- Card Header -->
+          <div class="card-head">
+            <div class="card-title-group">
+              <span class="card-icon">
+                {{ r.reminder_type === 'smart_watchdog' ? '🎯' : '⏰' }}
+              </span>
+              <strong class="card-rule-name">{{ r.rule_name }}</strong>
+            </div>
+
+            <div class="card-tags-group">
+              <span class="card-sev-tag"
+                    [class.tag-crit]="r.severity === 'critical' || r.is_permanent === 1"
+                    [class.tag-warn]="r.severity === 'warning'"
+                    [class.tag-info]="r.severity === 'info'">
+                {{ (r.is_permanent === 1 ? 'PERMANENT' : (r.severity || 'ALERT')) | uppercase }}
+              </span>
+              <button class="rule-active-toggle"
+                      [class.toggle-on]="r.active !== 0 && r.active !== false"
+                      (click)="onToggleRuleActiveClick(r)"
+                      [title]="(r.active !== 0 && r.active !== false) ? 'Active (Click to pause)' : 'Paused (Click to activate)'">
+                {{ (r.active !== 0 && r.active !== false) ? '🟢 Active' : '⚪ Paused' }}
+              </button>
+            </div>
+          </div>
+
+          <!-- Card Body -->
+          <div class="card-body-content">
+            <div class="card-condition-line">
+              <span *ngIf="r.reminder_type === 'smart_watchdog'" class="condition-badge">
+                <i class="pi pi-table me-1"></i>{{ r.target_table }}.{{ r.target_column }} {{ r.operator }} {{ r.operand_value }}
+              </span>
+              <span *ngIf="r.reminder_type === 'normal'" class="condition-badge">
+                <i class="pi pi-clock me-1"></i>{{ r.target_datetime || 'Specific Time' }}
+              </span>
+              <span class="freq-badge"><i class="pi pi-sync me-1"></i>{{ r.frequency || 'daily_once' }}</span>
+              <span *ngIf="r.schedule_time" class="time-badge"><i class="pi pi-clock me-1"></i>{{ r.schedule_time }}</span>
+            </div>
+
+            <div class="card-message-text">
+              {{ r.message_template || r.notes || 'Reminder Notification' }}
+            </div>
+          </div>
+
+          <!-- Card Footer Actions -->
+          <div class="card-foot-actions">
+            <button type="button"
+                    class="btn-card-action btn-test"
+                    (click)="onTestExistingRuleClick(r)"
+                    title="Test matching count against live database">
+              <i class="pi pi-bolt me-1"></i>Test DB
+            </button>
+            <div class="d-flex gap-1">
+              <button type="button"
+                      class="btn-card-action btn-edit"
+                      (click)="onEditReminderRuleClick(r)"
+                      title="Edit this reminder rule">
+                <i class="pi pi-pencil"></i>
+              </button>
+              <button type="button"
+                      class="btn-card-action btn-del"
+                      (click)="onDeleteReminderRuleClick(r._id)"
+                      title="Delete reminder rule">
+                <i class="pi pi-trash"></i>
+              </button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

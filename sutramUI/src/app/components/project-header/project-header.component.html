@@ -1,0 +1,97 @@
+<header class="erp-header">
+  <div class="header-left">
+    <!-- Hub Navigation Button -->
+    <button
+      type="button"
+      class="hub-nav-btn"
+      [class.active-hub]="showingHub"
+      (click)="goToHub.emit()"
+      title="Open Projects Hub to create or select projects">
+      <i class="pi pi-th-large"></i>
+      <span>Projects Hub</span>
+    </button>
+
+    <div class="header-v-sep"></div>
+
+    <!-- Multi-Project Workspace Tabs Bar -->
+    <div class="project-tabs-track">
+      <div
+        *ngFor="let p of projects"
+        class="project-tab"
+        [class.active-tab]="!showingHub && p.project_slug === activeProject?.project_slug"
+        (click)="onSelectTab(p)"
+        [title]="p.project_name + ' (' + p.project_slug + '.db)'">
+        
+        <div class="tab-dot" [style.background-color]="p.color || '#6366f1'"></div>
+        <span class="tab-title">{{ p.project_name }}</span>
+        <span class="tab-slug font-mono">{{ p.project_slug }}.db</span>
+
+        <button
+          type="button"
+          class="tab-close-btn"
+          (click)="onCloseTab(p, $event)"
+          title="Close tab">
+          ✕
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="header-right">
+    <!-- Live Server Connection Status -->
+    <div class="status-indicator" [title]="isServerOnline ? 'Connected to sutramServer' : 'Server is offline'">
+      <span class="status-dot" [class.dot-online]="isServerOnline" [class.dot-offline]="!isServerOnline"></span>
+      <span class="status-text">{{ isServerOnline ? 'Online' : 'Offline' }}</span>
+    </div>
+
+    <!-- LAN Network Explorer Button -->
+    <button
+      pButton
+      type="button"
+      class="p-button-sm p-button-rounded p-button-text lan-header-btn"
+      (click)="openLanModal.emit()"
+      icon="pi pi-globe"
+      [title]="'लोकल नेटवर्क शेयरिंग (LAN Sharing - ' + ((lanService.peers$ | async)?.length || 0) + ' Peers)'">
+      <span class="lan-count-badge" *ngIf="((lanService.peers$ | async)?.length || 0) > 0">
+        {{ (lanService.peers$ | async)?.length }}
+      </span>
+    </button>
+
+    <!-- App Update Button -->
+    <button
+      pButton
+      type="button"
+      class="p-button-sm p-button-rounded p-button-text update-header-btn"
+      (click)="openUpdateModal.emit()"
+      icon="pi pi-sync"
+      title="सॉफ़्टवेयर अपडेट (Sutram Updater)">
+    </button>
+
+    <!-- Active User Profile Pill -->
+    <div class="header-user-pill" [title]="'User: ' + (projectContext.activeMasterUser?.username || '')">
+      <i class="pi pi-user user-icon"></i>
+      <span class="user-name">{{ projectContext.activeMasterUser?.display_name || projectContext.activeMasterUser?.username }}</span>
+      <span class="user-role-badge font-mono">{{ projectContext.activeMasterUser?.role | uppercase }}</span>
+    </div>
+
+    <!-- Theme Switcher -->
+    <button
+      pButton
+      type="button"
+      class="p-button-sm p-button-rounded p-button-text theme-toggle-btn"
+      (click)="toggleTheme.emit()"
+      [icon]="isDarkMode ? 'pi pi-sun' : 'pi pi-moon'"
+      [title]="isDarkMode ? 'Switch to Light Theme' : 'Switch to Dark Theme'">
+    </button>
+
+    <!-- Logout Button -->
+    <button
+      pButton
+      type="button"
+      class="p-button-sm p-button-rounded p-button-text p-button-danger logout-btn ms-1"
+      (click)="logout.emit()"
+      icon="pi pi-sign-out"
+      title="लॉग आउट करें (Logout)">
+    </button>
+  </div>
+</header>

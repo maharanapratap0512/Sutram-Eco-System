@@ -1,0 +1,446 @@
+<div class="sutram-hub-container">
+  <!-- ── 1. Top Header ─────────────────────────────────────────── -->
+  <header class="hub-header">
+    <div class="header-left">
+      <div class="brand">
+        <i class="pi pi-th-large brand-icon"></i>
+        <span class="brand-title">सूत्रम् (Sutram)</span>
+        <span class="brand-badge">Workspace Hub</span>
+      </div>
+
+      <!-- Quick Search Bar -->
+      <div class="search-box">
+        <i class="pi pi-search search-icon"></i>
+        <input
+          type="text"
+          pInputText
+          class="p-inputtext-sm search-input"
+          [(ngModel)]="searchQuery"
+          placeholder="प्रोजेक्ट या डेटाबेस खोजें (Search projects...)" />
+      </div>
+    </div>
+
+    <div class="header-right">
+      <!-- Live Server Connection Status -->
+      <div class="status-indicator" [title]="isServerOnline ? 'Connected to sutramServer (Port 3300)' : 'sutramServer is offline'">
+        <span class="status-dot" [class.dot-online]="isServerOnline" [class.dot-offline]="!isServerOnline"></span>
+        <span class="status-text">{{ isServerOnline ? 'Server Online' : 'Server Offline' }}</span>
+      </div>
+
+      <!-- Active Master User Profile Pill -->
+      <div
+        class="hub-user-pill cursor-pointer"
+        (click)="openMasterUsersModal()"
+        [title]="'यूज़र: ' + (activeMasterUser?.username || '') + ' (' + (activeMasterUser?.role || '') + ') — क्लिक करके यूज़र्स व एक्सेस प्रबंधित करें'">
+        <i class="pi pi-user user-icon"></i>
+        <span class="user-name">{{ activeMasterUser?.display_name || activeMasterUser?.username || 'Master Admin' }}</span>
+        <span class="user-role-badge font-mono">{{ (activeMasterUser?.role || 'admin') | uppercase }}</span>
+      </div>
+
+      <!-- Refresh Projects Button -->
+      <button
+        pButton
+        type="button"
+        class="p-button-sm p-button-rounded p-button-text"
+        (click)="loadProjects()"
+        [icon]="isLoading ? 'pi pi-spin pi-spinner' : 'pi pi-refresh'"
+        title="Refresh Projects List">
+      </button>
+
+      <!-- Theme Switcher -->
+      <button
+        pButton
+        type="button"
+        class="p-button-sm p-button-rounded p-button-text"
+        (click)="toggleTheme.emit()"
+        [icon]="isDarkMode ? 'pi pi-sun' : 'pi pi-moon'"
+        [title]="isDarkMode ? 'Switch to Light Theme' : 'Switch to Dark Theme'">
+      </button>
+
+      <!-- Logout Button -->
+      <button
+        pButton
+        type="button"
+        class="p-button-sm p-button-outlined p-button-danger ms-1"
+        (click)="logout.emit()"
+        icon="pi pi-sign-out"
+        label="Logout"
+        title="लॉग आउट करें (Sign Out)">
+      </button>
+    </div>
+  </header>
+
+  <!-- ── 2. Hero Greeting Banner ─────────────────────────────────── -->
+  <section class="hub-hero">
+    <div class="hero-content">
+      <h1 class="hero-title">शुभ दिन! सूत्रम् कार्यक्षेत्र (Sutram Dynamic Workspace)</h1>
+      <p class="hero-subtitle">
+        डेटा प्रविष्टि और प्रबंधन के लिए नया प्रोजेक्ट डेटाबेस बनाएं या मौजूदा प्रोजेक्ट का चयन करें।
+      </p>
+    </div>
+  </section>
+
+  <!-- ── 3. Projects Grid (Excel-Style Start Canvas) ─────────────── -->
+  <main class="hub-canvas">
+    <div class="section-header">
+      <h2 class="section-title">
+        <i class="pi pi-folder-open section-icon"></i>
+        <span>प्रोजेक्ट वर्कस्पेस (Project Workspaces)</span>
+      </h2>
+      <span class="project-count-badge">{{ filteredProjects.length }} प्रोजेक्ट उपलब्ध</span>
+    </div>
+
+    <div class="projects-grid">
+      <!-- ── CARD 1: + Blank Project (Permission Based) ── -->
+      <div
+        class="project-card create-card"
+        [class.card-disabled]="!canCreateProject"
+        (click)="onCreateProjectClick('blank')"
+        [title]="canCreateProject ? 'नया रिक्त प्रोजेक्ट बनाएं' : '🔒 नया प्रोजेक्ट बनाने की अनुमति केवल व्यवस्थापक को है (Permission Required)'">
+        <div class="create-card-inner">
+          <div class="create-icon-wrap" [class.icon-locked]="!canCreateProject">
+            <i class="pi" [ngClass]="canCreateProject ? 'pi-plus' : 'pi-lock'"></i>
+          </div>
+          <h3 class="create-title">Blank Project</h3>
+          <p class="create-desc">
+            नया स्वतंत्र SQLite डेटाबेस बनाएं
+          </p>
+          <div class="create-action-pill" [class.pill-locked]="!canCreateProject">
+            <i class="pi" [ngClass]="canCreateProject ? 'pi-sparkles' : 'pi-lock'"></i>
+            <span>{{ canCreateProject ? '+ नया बनाएं' : 'अनुमति आवश्यक' }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── CARD 2: ⬆ Upload / Select DB (Permission Based) ── -->
+      <div
+        class="project-card create-card upload-card"
+        [class.card-disabled]="!canCreateProject"
+        (click)="onCreateProjectClick('upload')"
+        [title]="canCreateProject ? 'विद्यमान SQLite डेटाबेस चुनें या अपलोड करें' : '🔒 अनुमति आवश्यक'">
+        <div class="create-card-inner">
+          <div class="create-icon-wrap upload-icon-wrap" [class.icon-locked]="!canCreateProject">
+            <i class="pi" [ngClass]="canCreateProject ? 'pi-upload' : 'pi-lock'"></i>
+          </div>
+          <h3 class="create-title">Upload / Select DB</h3>
+          <p class="create-desc">
+            विद्यमान SQLite फ़ाइल जोड़ें
+          </p>
+          <div class="create-action-pill upload-pill" [class.pill-locked]="!canCreateProject">
+            <i class="pi" [ngClass]="canCreateProject ? 'pi-database' : 'pi-lock'"></i>
+            <span>{{ canCreateProject ? 'डेटाबेस जोड़ें' : 'अनुमति आवश्यक' }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── CARDS 3..N: Existing Projects beside it ────────────── -->
+      <div
+        class="project-card data-card"
+        *ngFor="let p of filteredProjects"
+        (click)="launchProject(p)"
+        (contextmenu)="onCardContextMenu($event, p, cm)"
+        [title]="'दायाँ क्लिक (Right Click) करके LAN शेयरिंग सेटिंग्स बदलें'">
+        <div class="card-top-bar">
+          <div
+            class="project-badge-icon"
+            [style.background-color]="(p.color || '#6366f1') + '20'"
+            [style.color]="p.color || '#6366f1'">
+            <i [class]="p.icon || 'pi pi-folder'"></i>
+          </div>
+
+          <div class="card-top-actions">
+            <!-- Network Visibility Status Badge (Replaces plain Open badge) -->
+            <span
+              class="visibility-badge cursor-pointer"
+              [class.live]="isProjectLive(p.project_slug)"
+              [class.private]="!isProjectLive(p.project_slug)"
+              (click)="toggleProjectShare(p, $event)"
+              [title]="isProjectLive(p.project_slug) ? '🟢 Live on LAN (क्लिक करके बंद करें / Right-click for options)' : '🔒 Private (क्लिक करके LAN पर शेयर करें)'">
+              <span class="live-dot" *ngIf="isProjectLive(p.project_slug)"></span>
+              <i class="pi pi-lock me-1" *ngIf="!isProjectLive(p.project_slug)"></i>
+              <span>{{ isProjectLive(p.project_slug) ? 'Live on LAN' : 'Private' }}</span>
+            </span>
+
+            <span class="access-role-badge" *ngIf="p.access_role">
+              {{ p.access_role | uppercase }}
+            </span>
+
+            <button
+              pButton
+              type="button"
+              class="p-button-sm p-button-rounded p-button-text p-button-danger delete-card-btn"
+              (click)="deleteProject(p, $event)"
+              icon="pi pi-trash"
+              title="Archive Project">
+            </button>
+          </div>
+        </div>
+
+        <div class="card-content">
+          <h3 class="project-title">{{ p.project_name }}</h3>
+          <div class="slug-tag font-mono">
+            <i class="pi pi-database"></i>
+            <span>{{ p.project_slug }}.db</span>
+          </div>
+          <p class="project-desc">{{ p.description || 'डेटाबेस कार्यक्षेत्र एवं स्प्रेडशीट स्टूडियो' }}</p>
+        </div>
+
+        <div class="card-footer">
+          <div class="stats-pills">
+            <span class="stat-item" title="Active Tables Count">
+              <i class="pi pi-table"></i>
+              <span>{{ p.tables_count || 0 }} तालिकायें</span>
+            </span>
+            <span class="stat-item" title="File Size">
+              <i class="pi pi-file"></i>
+              <span>{{ formatBytes(p.file_size) }}</span>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 4. Network Projects (लोकल नेटवर्क वर्कस्पेस) ────────────── -->
+    <div class="section-header network-section-header">
+      <h2 class="section-title">
+        <i class="pi pi-globe section-icon text-info"></i>
+        <span>नेटवर्क प्रोजेक्ट्स (Network Projects)</span>
+      </h2>
+      <div class="section-actions">
+        <span class="peer-status-tag" *ngIf="peers.length > 0">
+          <i class="pi pi-desktop me-1"></i> {{ peers.length }} कंप्यूटर ऑनलाइन
+        </span>
+        <button
+          pButton
+          type="button"
+          class="p-button-sm p-button-rounded p-button-text refresh-lan-btn ms-2"
+          (click)="refreshLan()"
+          [loading]="isScanningLan"
+          icon="pi pi-refresh"
+          title="नेटवर्क प्रोजेक्ट्स रीफ्रेश करें">
+        </button>
+      </div>
+    </div>
+
+    <div class="projects-grid network-projects-grid">
+      <!-- Empty state if no network projects -->
+      <div class="empty-network-card" *ngIf="networkProjectsList.length === 0">
+        <div class="empty-net-icon">
+          <i class="pi pi-wifi"></i>
+        </div>
+        <h4 class="empty-net-title">नेटवर्क पर कोई रिमोट प्रोजेक्ट नहीं मिला</h4>
+        <p class="empty-net-desc">
+          जब आपके वाई-फ़ाई/LAN पर कोई अन्य कंप्यूटर अपना प्रोजेक्ट 'Live on LAN' करेगा, वह सीधे यहाँ दिखाई देगा।
+        </p>
+      </div>
+
+      <!-- Remote Network Project Cards -->
+      <div
+        class="project-card network-project-card data-card"
+        *ngFor="let item of networkProjectsList"
+        (click)="connectToNetworkProject(item)"
+        title="क्लिक करके रिमोट प्रोजेक्ट से जुड़ें">
+        <div class="card-top-bar">
+          <div class="project-badge-icon network-icon">
+            <i class="pi pi-globe"></i>
+          </div>
+
+          <div class="card-top-actions">
+            <span class="peer-machine-pill" [title]="item.peer.ip + ':' + (item.peer.httpPort || 3300)">
+              <i class="pi pi-desktop me-1"></i>{{ item.peer.hostname || item.peer.name }}
+            </span>
+            <span
+              class="auth-requirement-pill"
+              [class.open]="item.project.authType === 'none'"
+              [class.pin]="item.project.authType === 'pin'"
+              [class.pass]="item.project.authType === 'password'">
+              <i class="pi" [ngClass]="item.project.authType === 'none' ? 'pi-check-circle' : 'pi-lock'"></i>
+              {{ item.project.authType === 'pin' ? 'PIN' : (item.project.authType === 'password' ? 'Pass' : 'Open') }}
+            </span>
+          </div>
+        </div>
+
+        <div class="card-content">
+          <h3 class="project-title">{{ item.project.name }}</h3>
+          <div class="slug-tag font-mono network-slug">
+            <i class="pi pi-sitemap"></i>
+            <span>{{ item.peer.ip }}:{{ item.peer.httpPort || 3300 }} / {{ item.project.id }}.db</span>
+          </div>
+          <p class="project-desc">{{ item.project.description || 'लोकल नेटवर्क पर उपलब्ध साझा प्रोजेक्ट' }}</p>
+        </div>
+
+        <div class="card-footer">
+          <div class="stats-pills">
+            <span class="stat-item" title="Active Tables Count">
+              <i class="pi pi-table"></i>
+              <span>{{ item.project.tablesCount || 0 }} तालिकायें</span>
+            </span>
+            <span class="stat-item peer-age" title="Last seen on LAN">
+              <i class="pi pi-clock"></i>
+              <span>{{ item.peer.ageSeconds || 0 }}s ago</span>
+            </span>
+          </div>
+
+          <button
+            pButton
+            type="button"
+            class="p-button-xs p-button-outlined p-button-info connect-btn"
+            (click)="$event.stopPropagation(); connectToNetworkProject(item)"
+            icon="pi pi-external-link"
+            label="Connect">
+          </button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ── Context Menu for Project Cards ───────────────────────────── -->
+<p-contextMenu #cm [model]="projectMenuItems"></p-contextMenu>
+
+<!-- ── Quick Share Dialog (Right-Click or Badge Click) ───────────── -->
+<p-dialog
+  [(visible)]="showQuickShareModal"
+  [modal]="true"
+  [closable]="true"
+  [style]="{ width: '480px', maxWidth: '96vw' }"
+  styleClass="quick-share-dialog"
+  header="नेटवर्क पर लाइव करें (Share on LAN)">
+  
+  <div class="quick-share-body" *ngIf="sharingProject">
+    <div class="proj-share-summary">
+      <div class="proj-dot" [style.background-color]="sharingProject.color || '#6366f1'"></div>
+      <div>
+        <strong>{{ sharingProject.project_name }}</strong>
+        <span class="font-mono text-muted text-xs ms-2">({{ sharingProject.project_slug }}.db)</span>
+      </div>
+    </div>
+
+    <div class="auth-options-wrap mt-3">
+      <label class="form-label text-sm fw-bold">सुरक्षा स्तर (Security Access):</label>
+      <div class="options-row d-flex gap-3 mt-1">
+        <label class="radio-label">
+          <input type="radio" name="quickAuth" value="pin" [(ngModel)]="quickAuthType" />
+          <span>4-अंकीय PIN</span>
+        </label>
+        <label class="radio-label">
+          <input type="radio" name="quickAuth" value="password" [(ngModel)]="quickAuthType" />
+          <span>पासवर्ड</span>
+        </label>
+        <label class="radio-label">
+          <input type="radio" name="quickAuth" value="none" [(ngModel)]="quickAuthType" />
+          <span>ओपन (खुला)</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="pin-input-group mt-3" *ngIf="quickAuthType === 'pin'">
+      <label class="form-label text-xs text-muted">प्रोजेक्ट एक्सेस PIN:</label>
+      <input
+        type="text"
+        pInputText
+        maxlength="8"
+        class="p-inputtext-sm font-mono w-full"
+        [(ngModel)]="quickPin"
+        placeholder="e.g. 1234" />
+      <small class="text-muted d-block mt-1">अन्य कंप्यूटर से जुड़ने वाले यूज़र को यह PIN दर्ज करना होगा।</small>
+    </div>
+
+    <div class="pin-input-group mt-3" *ngIf="quickAuthType === 'password'">
+      <label class="form-label text-xs text-muted">प्रोजेक्ट पासवर्ड:</label>
+      <input
+        type="password"
+        pInputText
+        class="p-inputtext-sm w-full"
+        [(ngModel)]="quickPassword"
+        placeholder="गुप्त पासवर्ड दर्ज करें..." />
+    </div>
+
+    <div class="error-banner mt-2" *ngIf="shareError">
+      <i class="pi pi-exclamation-triangle me-1"></i> {{ shareError }}
+    </div>
+  </div>
+
+  <ng-template pTemplate="footer">
+    <button
+      pButton
+      type="button"
+      class="p-button-sm p-button-text"
+      (click)="showQuickShareModal = false"
+      label="रद्द करें">
+    </button>
+    <button
+      pButton
+      type="button"
+      class="p-button-sm p-button-success"
+      [loading]="isSharingSubmitting"
+      (click)="confirmQuickShare()"
+      icon="pi pi-check"
+      label="Go Live (लाइव करें)">
+    </button>
+  </ng-template>
+</p-dialog>
+
+<!-- ── Remote Network Project PIN/Password Auth Modal ────────────── -->
+<p-dialog
+  [(visible)]="showRemoteAuthModal"
+  [modal]="true"
+  [closable]="true"
+  [style]="{ width: '420px' }"
+  styleClass="lan-auth-dialog"
+  header="सुरक्षा सत्यापन (Remote Access PIN)">
+
+  <div class="auth-modal-body" *ngIf="selectedRemoteProject">
+    <p class="text-sm">
+      प्रोजेक्ट <strong>{{ selectedRemoteProject.name }}</strong> को खोलने के लिए
+      {{ selectedRemoteProject.authType === 'pin' ? '4-अंकीय PIN' : 'पासवर्ड' }} दर्ज करें:
+    </p>
+
+    <div class="input-wrap mt-2">
+      <input
+        [type]="selectedRemoteProject.authType === 'pin' ? 'password' : 'password'"
+        pInputText
+        class="p-inputtext-sm w-full text-center font-mono text-lg"
+        [(ngModel)]="authSecretInput"
+        (keyup.enter)="submitRemoteAuth()"
+        [placeholder]="selectedRemoteProject.authType === 'pin' ? 'PIN दर्ज करें' : 'पासवर्ड दर्ज करें'"
+        autofocus />
+    </div>
+
+    <div class="error-banner mt-2" *ngIf="authError">
+      <i class="pi pi-exclamation-triangle me-1"></i> {{ authError }}
+    </div>
+  </div>
+
+  <ng-template pTemplate="footer">
+    <button
+      pButton
+      type="button"
+      class="p-button-sm p-button-text"
+      (click)="showRemoteAuthModal = false"
+      label="रद्द करें">
+    </button>
+    <button
+      pButton
+      type="button"
+      class="p-button-sm p-button-primary"
+      [loading]="isAuthenticating"
+      (click)="submitRemoteAuth()"
+      icon="pi pi-lock-open"
+      label="सत्यापित करें व खोलें">
+    </button>
+  </ng-template>
+</p-dialog>
+
+<!-- ── Create Project Dialog ────────────────────────────────────── -->
+<app-create-project-modal
+  [(visible)]="showCreateModal"
+  [initialMode]="initialModalMode"
+  (projectCreated)="onProjectCreated($event)">
+</app-create-project-modal>
+
+<!-- ── Master Users & Access Management Dialog ──────────────────── -->
+<app-master-users-modal
+  [(visible)]="showMasterUsersModal"
+  (userSwitched)="loadProjects()">
+</app-master-users-modal>

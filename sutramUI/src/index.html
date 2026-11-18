@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+  <meta charset="utf-8">
+  <title>Sutram Dynamic ERP — Universal Schema-Driven Platform</title>
+  <base href="/">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <script>
+    window.addEventListener('error', function(event) {
+      document.title = 'BOOTSTRAP_ERROR: ' + event.message;
+      var el = document.getElementById('err-display') || document.createElement('div');
+      el.id = 'err-display';
+      el.style = 'color:#b91c1c; background:#fef2f2; border:2px solid #ef4444; padding:20px; font-size:15px; font-family:monospace; position:fixed; top:0; left:0; right:0; bottom:0; z-index:999999; overflow:auto; white-space:pre-wrap;';
+      el.innerText = '⚠️ SutramUI Runtime Error:\n\n' + (event.message || event.error) + '\n\nFile: ' + event.filename + ':' + event.lineno + ':' + event.colno + '\n\nStack:\n' + (event.error && event.error.stack ? event.error.stack : '');
+      document.body.appendChild(el);
+    });
+    window.addEventListener('unhandledrejection', function(event) {
+      document.title = 'REJECTION: ' + (event.reason && event.reason.message ? event.reason.message : event.reason);
+      var el = document.getElementById('err-display') || document.createElement('div');
+      el.id = 'err-display';
+      el.style = 'color:#b91c1c; background:#fef2f2; border:2px solid #ef4444; padding:20px; font-size:15px; font-family:monospace; position:fixed; top:0; left:0; right:0; bottom:0; z-index:999999; overflow:auto; white-space:pre-wrap;';
+      el.innerText = '⚠️ SutramUI Unhandled Rejection:\n\n' + (event.reason && event.reason.message ? event.reason.message : event.reason) + '\n\nStack:\n' + (event.reason && event.reason.stack ? event.reason.stack : '');
+      document.body.appendChild(el);
+    });
+  </script>
+</head>
+<body class="sutram-erp-body m-0 p-0 overflow-hidden">
+  <app-root>
+    <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#6366f1;font-size:18px;">
+      सूत्रम् ERP लोड हो रहा है... (Loading Sutram ERP...)
+    </div>
+  </app-root>
+</body>
+</html>

@@ -1,0 +1,228 @@
+.profiles-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.tip-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(99, 102, 241, 0.08);
+  border-left: 3px solid #6366f1;
+  padding: 10px 14px;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  color: var(--erp-text, #0f172a);
+
+  i {
+    color: #6366f1;
+    font-size: 1.1rem;
+  }
+}
+
+.rotate-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--erp-surface, rgba(0, 0, 0, 0.02));
+  border: 1px solid var(--erp-surface-border, rgba(0, 0, 0, 0.08));
+  border-radius: 8px;
+  padding: 10px 14px;
+
+  .rotate-title {
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: var(--erp-text, #0f172a);
+  }
+
+  .rotate-desc {
+    font-size: 0.78rem;
+    color: var(--erp-text-muted, #64748b);
+  }
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  .section-title {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--erp-text, #0f172a);
+  }
+}
+
+.add-form-card {
+  background: var(--erp-surface, #ffffff);
+  border: 1px solid var(--erp-surface-border, rgba(0, 0, 0, 0.12));
+  border-radius: 8px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+
+  .form-title {
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: var(--erp-text, #0f172a);
+  }
+
+  .form-row {
+    display: flex;
+    gap: 12px;
+    width: 100%;
+
+    .form-col {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+
+      &.col-4 { flex: 4; }
+      &.col-6 { flex: 6; }
+      &.col-8 { flex: 8; }
+
+      .field-label {
+        font-size: 0.78rem;
+        font-weight: 600;
+        color: var(--erp-text-muted, #64748b);
+      }
+    }
+  }
+
+  .form-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 6px;
+  }
+}
+
+.table-container {
+  overflow-x: auto;
+  border: 1px solid var(--erp-surface-border, rgba(0, 0, 0, 0.08));
+  border-radius: 8px;
+}
+
+.profile-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+
+  th, td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--erp-surface-border, rgba(0, 0, 0, 0.08));
+  }
+
+  thead th {
+    background: var(--erp-surface, rgba(0, 0, 0, 0.03));
+    font-weight: 700;
+    color: var(--erp-text-muted, #64748b);
+  }
+
+  tbody tr {
+    &:hover {
+      background: rgba(99, 102, 241, 0.02);
+    }
+
+    &.table-active {
+      background: rgba(99, 102, 241, 0.05);
+    }
+  }
+
+  .profile-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    .star-icon {
+      font-size: 1rem;
+    }
+
+    .profile-name {
+      font-weight: 700;
+      color: var(--erp-text, #0f172a);
+    }
+
+    .profile-model {
+      font-size: 0.75rem;
+      color: var(--erp-text-muted, #64748b);
+    }
+  }
+
+  .text-right {
+    text-align: right;
+  }
+
+  .action-btn {
+    margin-left: 4px;
+  }
+}
+
+.cursor-pointer {
+  cursor: pointer;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Dark Mode Overrides (Rules 20 & 21)
+// ─────────────────────────────────────────────────────────────
+:host(.dark-mode),
+::ng-deep body.dark-mode {
+  .tip-banner {
+    color: var(--erp-text, #f8fafc);
+  }
+
+  .rotate-card {
+    background: rgba(30, 41, 59, 0.6);
+    border-color: var(--erp-surface-border, #334155);
+
+    .rotate-title { color: var(--erp-text, #f8fafc); }
+  }
+
+  .section-header .section-title {
+    color: var(--erp-text, #f8fafc);
+  }
+
+  .add-form-card {
+    background: var(--erp-surface, #1e293b);
+    border-color: var(--erp-surface-border, #334155);
+
+    .form-title { color: var(--erp-text, #f8fafc); }
+  }
+
+  .table-container {
+    border-color: var(--erp-surface-border, #334155);
+  }
+
+  .profile-table {
+    th, td {
+      border-color: var(--erp-surface-border, #334155);
+    }
+
+    thead th {
+      background: rgba(15, 23, 42, 0.6);
+      color: var(--erp-text-muted, #94a3b8);
+    }
+
+    tbody tr {
+      &:hover {
+        background: rgba(99, 102, 241, 0.1);
+      }
+      &.table-active {
+        background: rgba(99, 102, 241, 0.15);
+      }
+
+      .profile-info .profile-name {
+        color: var(--erp-text, #f8fafc);
+      }
+    }
+  }
+
+  input.p-inputtext,
+  ::ng-deep .p-dropdown {
+    background: var(--erp-bg, #0f172a) !important;
+    border-color: var(--erp-surface-border, #334155) !important;
+    color: var(--erp-text, #f8fafc) !important;
+  }
+}

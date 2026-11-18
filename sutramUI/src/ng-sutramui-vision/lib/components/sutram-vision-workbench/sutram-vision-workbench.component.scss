@@ -1,0 +1,39 @@
+.sutram-vision-workbench-wrapper {
+  background: var(--erp-surface, #ffffff);
+  border-bottom: 2px solid var(--erp-surface-border, rgba(0, 0, 0, 0.08));
+  border-radius: 0 0 8px 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  animation: slideDown 0.2s ease-out;
+}
+
+.workbench-top-bar {
+  border-bottom: 1px solid var(--erp-surface-border, rgba(0, 0, 0, 0.06));
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Dark Mode Overrides (Rules 20 & 21)
+// ─────────────────────────────────────────────────────────────
+:host(.dark-mode),
+::ng-deep body.dark-mode {
+  .sutram-vision-workbench-wrapper {
+    background: var(--erp-surface, #1e293b);
+    border-bottom-color: var(--erp-surface-border, #334155);
+    color: var(--erp-text, #f8fafc);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  }
+
+  .workbench-top-bar {
+    border-bottom-color: var(--erp-surface-border, #334155);
+  }
+}

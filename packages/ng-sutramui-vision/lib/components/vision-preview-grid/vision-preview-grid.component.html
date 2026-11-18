@@ -1,0 +1,106 @@
+<div class="vision-preview-container">
+  <!-- Top Action Header -->
+  <div class="preview-header">
+    <div class="header-left">
+      <button pButton type="button" icon="pi pi-arrow-left" label="Back to Scanner" class="p-button-sm p-button-text" (click)="closePreview.emit()"></button>
+      <span class="doc-title">{{ extractResult?.data?.detectedTitle || 'Extracted Tabular Rows' }}</span>
+      <p-tag severity="info" [value]="rows.length + ' Rows'"></p-tag>
+      <p-tag *ngIf="extractResult?.tokenUsage" severity="secondary" [value]="extractResult?.tokenUsage?.totalTokens + ' tokens'"></p-tag>
+    </div>
+
+    <div class="header-right">
+      <button 
+        pButton 
+        type="button" 
+        [label]="'📥 Create New Sheet with Data (' + rows.length + ' Rows)'" 
+        icon="pi pi-file-plus" 
+        class="p-button-success p-button-raised create-sheet-btn" 
+        (click)="onConfirmCreateSheet()">
+      </button>
+    </div>
+  </div>
+
+  <!-- Active Learning Banner -->
+  <div *ngIf="activeCorrection.visible" class="correction-banner">
+    <div class="banner-text">
+      <i class="pi pi-lightbulb"></i>
+      <span><strong>Teach AI this handwriting mistake?</strong> In field <code>{{ activeCorrection.field }}</code>, remember: <em>"{{ activeCorrection.original }}"</em> → <strong>"{{ activeCorrection.corrected }}"</strong></span>
+    </div>
+    <div class="banner-actions">
+      <button pButton type="button" label="Save Rule" icon="pi pi-check" class="p-button-xs p-button-warning" (click)="saveCorrection()"></button>
+      <button pButton type="button" label="Dismiss" class="p-button-xs p-button-text" (click)="activeCorrection.visible = false"></button>
+    </div>
+  </div>
+
+  <!-- Split Screen Layout -->
+  <div class="preview-split-layout">
+    <!-- Left: Original Image Viewer Card -->
+    <div class="split-pane image-pane">
+      <div class="pane-header">
+        <span class="pane-title">Original Handwritten Document</span>
+      </div>
+      <div class="image-viewport">
+        <img [src]="previewImageUrl" alt="Original Scan" class="document-img" />
+      </div>
+    </div>
+
+    <!-- Right: Extracted Table Grid Pane -->
+    <div class="split-pane table-pane">
+      <div class="pane-header">
+        <span class="pane-title">Extracted Data (Click cell to edit)</span>
+        <span class="pane-hint">Align extracted columns to target schema if needed</span>
+      </div>
+
+      <div class="table-viewport">
+        <table class="preview-table">
+          <thead>
+            <!-- Row 1: Target Column Dropdowns -->
+            <tr class="matcher-row">
+              <th class="col-num">#</th>
+              <th *ngFor="let col of columns">
+                <p-dropdown 
+                  *ngIf="targetSheetColumns.length > 0"
+                  [options]="targetSheetColumns" 
+                  [(ngModel)]="columnMappings[col.key]" 
+                  optionLabel="label" 
+                  optionValue="value" 
+                  placeholder="Map column..." 
+                  styleClass="w-100 col-matcher-dropdown">
+                </p-dropdown>
+                <div *ngIf="targetSheetColumns.length === 0" class="col-tag">{{ col.key }}</div>
+              </th>
+              <th class="col-action"></th>
+            </tr>
+            <!-- Row 2: Extracted Column Headers -->
+            <tr class="header-row">
+              <th class="col-num">#</th>
+              <th *ngFor="let col of columns">
+                <div class="col-header-text">{{ col.header_text }}</div>
+                <div class="col-header-sub">{{ col.key }}</div>
+              </th>
+              <th class="col-action"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let row of rows; let rIdx = index" [class.slip-end-row]="row.slip_total">
+              <td class="col-num text-muted">{{ rIdx + 1 }}</td>
+              <td *ngFor="let col of columns" class="cell-editable" [class.cell-total]="col.key === 'slip_total' && row[col.key]">
+                <input 
+                  type="text" 
+                  class="cell-input" 
+                  [class.total-val]="col.key === 'slip_total' && row[col.key]"
+                  [class.discount-val]="col.key === 'discount_roundoff' && row[col.key]"
+                  [ngModel]="row[col.key]" 
+                  (blur)="onCellEdited(row, col.key, $event.target.value)"
+                  (ngModelChange)="row[col.key] = $event" />
+              </td>
+              <td class="col-action text-center">
+                <button pButton type="button" icon="pi pi-trash" class="p-button-text p-button-danger p-button-xs" (click)="deleteRow(rIdx)" title="Delete Row"></button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>

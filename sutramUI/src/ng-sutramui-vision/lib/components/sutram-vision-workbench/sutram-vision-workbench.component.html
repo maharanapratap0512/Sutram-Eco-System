@@ -1,0 +1,65 @@
+<div class="sutram-vision-workbench-wrapper p-3">
+  <p-toast key="visionToast" position="top-right"></p-toast>
+  <!-- Top Bar -->
+  <div class="workbench-top-bar d-flex align-items-center justify-content-between pb-2 mb-3">
+    <div class="d-flex align-items-center gap-2">
+      <i class="uil uil-camera text-primary fs-4"></i>
+      <div>
+        <h6 class="mb-0 fw-bold">SutramVision — Handwritten Register & Invoice OCR</h6>
+        <div class="text-muted small">Target: {{ tableTitle || tableName }}</div>
+      </div>
+    </div>
+
+    <div class="d-flex align-items-center gap-2">
+      <!-- Profile Button -->
+      <button 
+        pButton 
+        type="button" 
+        icon="pi pi-key" 
+        [label]="activeProfile?.label || 'API Key Profiles'" 
+        class="p-button-sm p-button-outlined" 
+        (click)="openProfiles()">
+      </button>
+
+      <!-- Close Workbench Button -->
+      <button 
+        pButton 
+        type="button" 
+        icon="pi pi-times" 
+        class="p-button-sm p-button-rounded p-button-text text-muted" 
+        (click)="close.emit()"
+        title="Close Vision Workbench">
+      </button>
+    </div>
+  </div>
+
+  <!-- Sub-View: Scanner -->
+  <div *ngIf="currentView === 'scanner'">
+    <sutram-vision-scanner
+      [isDarkMode]="isDarkMode"
+      [targetColumns]="targetSheetColumns"
+      [activeProfileLabel]="activeProfile?.label || ''"
+      (scanCompleted)="onScanCompleted($event)">
+    </sutram-vision-scanner>
+  </div>
+
+  <!-- Sub-View: Preview & Alignment -->
+  <div *ngIf="currentView === 'preview'">
+    <sutram-vision-preview-grid
+      [isDarkMode]="isDarkMode"
+      [previewImageUrl]="activePreviewImage"
+      [extractResult]="activeExtractResult"
+      [targetSheetColumns]="targetSheetColumns"
+      [tableName]="tableName"
+      (insertRows)="onInsertRows($event)"
+      (closePreview)="onBackToScanner()">
+    </sutram-vision-preview-grid>
+  </div>
+
+  <!-- API Profiles Modal -->
+  <sutram-vision-profiles-modal
+    [(visible)]="showProfilesModal"
+    [isDarkMode]="isDarkMode"
+    (profilesUpdated)="onProfilesUpdated()">
+  </sutram-vision-profiles-modal>
+</div>

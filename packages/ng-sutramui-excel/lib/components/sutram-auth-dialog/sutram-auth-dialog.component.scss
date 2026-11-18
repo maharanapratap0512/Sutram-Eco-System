@@ -1,0 +1,119 @@
+.auth-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 0.35rem 0 0;
+}
+
+.auth-error-box {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.85rem;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 6px;
+  color: #ef4444;
+  font-size: 0.8rem;
+
+  i {
+    font-size: 0.95rem;
+  }
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.95rem;
+  width: 100%;
+}
+
+.auth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  width: 100%;
+
+  label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--erp-text-muted, #64748b);
+  }
+
+  .input-full-span {
+    width: 100% !important;
+    display: block !important;
+    position: relative;
+
+    input.auth-input {
+      width: 100% !important;
+      display: block !important;
+      box-sizing: border-box !important;
+      height: 36px !important;
+      padding-left: 2.25rem !important;
+      font-size: 0.84rem !important;
+    }
+  }
+
+  ::ng-deep .auth-password-wrap,
+  ::ng-deep .p-password {
+    width: 100% !important;
+    display: block !important;
+
+    .p-inputtext,
+    input {
+      width: 100% !important;
+      display: block !important;
+      box-sizing: border-box !important;
+      height: 36px !important;
+      font-size: 0.84rem !important;
+    }
+
+    .p-password-toggle-mask-icon {
+      margin-top: -8px;
+    }
+  }
+}
+
+.auth-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+
+  .auth-submit-btn {
+    min-width: 120px;
+    font-size: 0.82rem;
+  }
+}
+
+// ── Dynamic Theme & Dark Mode Protection (Zero White Controls - Rule 21) ──
+::ng-deep body.dark-mode {
+  .sutram-auth-dialog {
+    .p-dialog-header,
+    .p-dialog-content,
+    .p-dialog-footer {
+      background: var(--erp-surface, #1e293b) !important;
+      color: var(--erp-text, #f8fafc) !important;
+      border-color: var(--erp-surface-border, #334155) !important;
+    }
+
+    .p-inputtext,
+    .p-password input {
+      background: rgba(15, 23, 42, 0.8) !important;
+      border-color: var(--erp-surface-border, #334155) !important;
+      color: var(--erp-text, #f8fafc) !important;
+
+      &:focus {
+        border-color: #6366f1 !important;
+        box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.25) !important;
+      }
+    }
+
+    .p-input-icon-left > i,
+    .p-password i {
+      color: var(--erp-text-muted, #94a3b8) !important;
+    }
+  }
+}

@@ -1,0 +1,218 @@
+<p-dialog
+  [(visible)]="visible"
+  [modal]="true"
+  [closable]="true"
+  [dismissableMask]="true"
+  [resizable]="false"
+  [draggable]="false"
+  [style]="{ width: '750px', maxWidth: '96vw' }"
+  styleClass="app-updater-dialog"
+  (onHide)="close()">
+
+  <ng-template pTemplate="header">
+    <div class="dialog-header-wrap">
+      <div class="header-icon-box">
+        <i class="pi pi-sync"></i>
+      </div>
+      <div class="header-text">
+        <h3 class="header-title">सूत्रम् अपडेट मैनेजर (Sutram Safe App Updater)</h3>
+        <p class="header-desc">ऑफ़लाइन ज़िप अपडेट स्थापित करें या पूर्व स्थिति पर रोलबैक करें</p>
+      </div>
+    </div>
+  </ng-template>
+
+  <div class="dialog-body">
+    <!-- Navigation Tabs -->
+    <div class="updater-tabs">
+      <button
+        type="button"
+        class="nav-tab-btn"
+        [class.active]="activeTab === 'update'"
+        (click)="onTabChange('update')">
+        <i class="pi pi-cloud-upload me-2"></i>
+        <span>सॉफ़्टवेयर अपडेट (Apply Update)</span>
+      </button>
+
+      <button
+        type="button"
+        class="nav-tab-btn"
+        [class.active]="activeTab === 'backups'"
+        (click)="onTabChange('backups')">
+        <i class="pi pi-history me-2"></i>
+        <span>सुरक्षित बैकअप व रोलबैक (Backups & Rollback)</span>
+        <span class="badge ms-2" *ngIf="backups.length > 0">{{ backups.length }}</span>
+      </button>
+    </div>
+
+    <!-- ── TAB 1: APPLY UPDATE ────────────────────────────────────── -->
+    <div class="tab-content" *ngIf="activeTab === 'update'">
+      <!-- Safe Storage Reassurance Banner -->
+      <div class="safe-banner">
+        <i class="pi pi-shield safe-icon"></i>
+        <div class="safe-text">
+          <strong>डेटा सुरक्षा गारंटी (Zero Data Loss):</strong>
+          <span> आपका डेटाबेस फोल्डर (<code>./data/</code>) हमेशा सुरक्षित रहेगा। अपडेट लागू करने से ठीक पहले वर्तमान सर्वर व यूआई का स्वचालित बैकअप लिया जाता है।</span>
+        </div>
+      </div>
+
+      <!-- File Select Dropzone -->
+      <div class="update-dropzone" *ngIf="!selectedFile && !isApplyingUpdate && !updateResult">
+        <input
+          type="file"
+          id="zipInput"
+          accept=".zip"
+          (change)="onFileSelected($event)"
+          class="file-input-hidden" />
+        <label for="zipInput" class="dropzone-label">
+          <i class="pi pi-file-excel drop-icon"></i>
+          <span class="drop-title">अपडेट ZIP फ़ाइल चुनें (Choose update.zip)</span>
+          <span class="drop-hint">फ़ाइल को यहाँ ड्रैग करें या क्लिक करके चुनें (.zip)</span>
+        </label>
+      </div>
+
+      <!-- Selected File Card -->
+      <div class="selected-file-card" *ngIf="selectedFile && !isApplyingUpdate && !updateResult">
+        <div class="file-icon-box">
+          <i class="pi pi-file"></i>
+        </div>
+        <div class="file-meta">
+          <span class="file-name">{{ selectedFile.name }}</span>
+          <span class="file-size">{{ (selectedFile.size / (1024 * 1024)).toFixed(2) }} MB</span>
+        </div>
+        <button
+          type="button"
+          class="btn-remove"
+          (click)="removeSelectedFile()"
+          title="फ़ाइल हटाएं">
+          ✕
+        </button>
+      </div>
+
+      <!-- Applying Progress -->
+      <div class="applying-box" *ngIf="isApplyingUpdate">
+        <i class="pi pi-spin pi-spinner spin-lg"></i>
+        <h4>अपडेट सुरक्षित रूप से स्थापित हो रहा है...</h4>
+        <p>1. बैकअप स्नैपशॉट बनाया जा रहा है &nbsp;➔&nbsp; 2. नई फाइलों को सत्यापित व बदला जा रहा है...</p>
+      </div>
+
+      <!-- Success Result Box -->
+      <div class="success-box" *ngIf="updateResult">
+        <div class="success-icon-box">
+          <i class="pi pi-check-circle"></i>
+        </div>
+        <h4>सॉफ़्टवेयर सफलतापूर्वक अपडेट हो गया!</h4>
+        <p class="sub">{{ updateResult.message }}</p>
+
+        <div class="result-details" *ngIf="updateResult.backupId">
+          <span>सुरक्षा बैकअप स्नैपशॉट ID: <code>{{ updateResult.backupId }}</code></span>
+          <span *ngIf="updateResult.updatedFolders">अपडेट किए गए फोल्डर: <strong>{{ updateResult.updatedFolders.join(', ') }}</strong></span>
+        </div>
+
+        <div class="reload-prompt">
+          <button
+            pButton
+            type="button"
+            class="p-button-sm p-button-success"
+            (click)="reloadApp()"
+            icon="pi pi-refresh"
+            label="एप्लिकेशन रीलोड करें (Reload App)">
+          </button>
+        </div>
+      </div>
+
+      <!-- Error Banner -->
+      <div class="error-banner" *ngIf="updateError">
+        <i class="pi pi-exclamation-triangle me-2"></i>
+        <span>{{ updateError }}</span>
+      </div>
+
+      <!-- Actions -->
+      <div class="action-footer" *ngIf="selectedFile && !isApplyingUpdate && !updateResult">
+        <button
+          pButton
+          type="button"
+          class="p-button-sm p-button-secondary p-button-text"
+          (click)="removeSelectedFile()"
+          label="रद्द करें">
+        </button>
+        <button
+          pButton
+          type="button"
+          class="p-button-sm p-button-primary"
+          (click)="applyUpdate()"
+          icon="pi pi-check"
+          label="अपडेट स्थापित करें (Apply Update)">
+        </button>
+      </div>
+    </div>
+
+    <!-- ── TAB 2: BACKUPS & ROLLBACK ─────────────────────────────── -->
+    <div class="tab-content" *ngIf="activeTab === 'backups'">
+      <div class="backups-header">
+        <span class="sub-title">सहेजे गए बैकअप स्नैपशॉट (Restore Points)</span>
+        <button
+          pButton
+          type="button"
+          class="p-button-sm p-button-text"
+          (click)="loadBackups()"
+          [loading]="isLoadingBackups"
+          icon="pi pi-refresh"
+          label="रीफ़्रेश">
+        </button>
+      </div>
+
+      <div class="success-banner" *ngIf="rollbackMessage">
+        <i class="pi pi-check me-2"></i> {{ rollbackMessage }}
+      </div>
+
+      <div class="error-banner" *ngIf="rollbackError">
+        <i class="pi pi-exclamation-triangle me-2"></i> {{ rollbackError }}
+      </div>
+
+      <!-- Empty State -->
+      <div class="empty-backups" *ngIf="backups.length === 0 && !isLoadingBackups">
+        <i class="pi pi-folder-open empty-icon"></i>
+        <p>अभी तक कोई बैकअप स्नैपशॉट उपलब्ध नहीं है। जब भी आप अपडेट करेंगे, यहाँ बैकअप स्वचालित रूप से दिखेगा।</p>
+      </div>
+
+      <!-- Backups Table -->
+      <div class="backups-list" *ngIf="backups.length > 0">
+        <div class="backup-row" *ngFor="let b of backups">
+          <div class="b-meta">
+            <span class="b-id font-mono">{{ b.id }}</span>
+            <span class="b-date">{{ b.date }}</span>
+          </div>
+
+          <div class="b-stats">
+            <span class="b-size">{{ b.sizeFormatted }}</span>
+            <span class="b-items">{{ b.itemsCount }} फ़ोल्डर</span>
+          </div>
+
+          <div class="b-action">
+            <button
+              pButton
+              type="button"
+              class="p-button-sm p-button-outlined p-button-warning"
+              [disabled]="isRollingBack"
+              (click)="rollbackToBackup(b)"
+              icon="pi pi-history"
+              label="रोलबैक करें (Restore)">
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <ng-template pTemplate="footer">
+    <div class="dialog-footer-wrap">
+      <button
+        pButton
+        type="button"
+        class="p-button-sm p-button-secondary p-button-text"
+        (click)="close()"
+        label="बंद करें (Close)">
+      </button>
+    </div>
+  </ng-template>
+</p-dialog>

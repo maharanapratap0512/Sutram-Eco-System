@@ -1,0 +1,161 @@
+<div class="vision-scanner-container">
+  <!-- Controls Toolbar -->
+  <div class="scanner-toolbar">
+    <div class="toolbar-left">
+      <!-- Mode Selection (Eco vs Smart) -->
+      <div class="control-group">
+        <label class="control-label">Mode:</label>
+        <p-dropdown 
+          [options]="modeOptions" 
+          [(ngModel)]="mode" 
+          optionLabel="label" 
+          optionValue="value" 
+          styleClass="scanner-dropdown">
+        </p-dropdown>
+      </div>
+
+      <!-- Document Type Selection -->
+      <div class="control-group">
+        <label class="control-label">Document Type:</label>
+        <p-dropdown 
+          [options]="docTypeOptions" 
+          [(ngModel)]="documentType" 
+          optionLabel="label" 
+          optionValue="value" 
+          styleClass="scanner-dropdown">
+        </p-dropdown>
+      </div>
+    </div>
+
+    <div class="toolbar-right">
+      <p-tag *ngIf="activeProfileLabel" severity="info" [value]="activeProfileLabel" icon="pi pi-key" styleClass="profile-tag"></p-tag>
+      <p-tag *ngIf="images.length > 0" severity="success" [value]="'~' + totalEstimatedTokens + ' tokens'" icon="pi pi-bolt"></p-tag>
+      <button 
+        *ngIf="images.length > 0" 
+        pButton 
+        type="button" 
+        label="Clear All" 
+        icon="pi pi-trash" 
+        class="p-button-text p-button-danger p-button-sm" 
+        (click)="clearAll()">
+      </button>
+    </div>
+  </div>
+
+  <!-- Interactive Drag & Drop Box -->
+  <div 
+    class="dropzone-box" 
+    (drop)="onFileDropped($event)" 
+    (dragover)="onDragOver($event)">
+    <div class="dropzone-content">
+      <div class="dropzone-icon">
+        <i class="pi pi-cloud-upload"></i>
+      </div>
+      <div class="dropzone-title">Drag & Drop Handwritten Images, or Paste (Ctrl+V / ⌘V)</div>
+      <div class="dropzone-desc">Supports JPG, PNG, WEBP invoices, bilti receipts, & Aawak-Jawak register pages. Automatically downscaled for 80%+ token savings.</div>
+      
+      <div class="dropzone-actions">
+        <button 
+          pButton 
+          type="button" 
+          icon="pi pi-images" 
+          label="Browse Files / Camera" 
+          class="p-button-outlined p-button-primary p-button-sm browse-btn" 
+          (click)="fileInput.click()">
+        </button>
+        <input #fileInput type="file" multiple accept="image/*" class="d-none" style="display: none;" (change)="onFileInput($event)" />
+      </div>
+    </div>
+  </div>
+
+  <!-- Compression & Bulk Efficiency Banner -->
+  <div *ngIf="images.length > 0" class="compression-banner">
+    <div class="banner-stat">
+      <i class="pi pi-file"></i>
+      <span>Original: <strong>{{ formatBytes(totalOriginalBytes) }}</strong></span>
+    </div>
+    <i class="pi pi-arrow-right banner-arrow"></i>
+    <div class="banner-stat">
+      <i class="pi pi-bolt text-success"></i>
+      <span>Downscaled: <strong>{{ formatBytes(totalCompressedBytes) }}</strong></span>
+      <span class="badge-saved">-{{ totalSavingsPercent }}%</span>
+    </div>
+    <div class="banner-stat bulk-mode-stat" [class.highlight]="images.length > 1">
+      <i class="pi pi-box"></i>
+      <span *ngIf="images.length > 1"><strong>Bulk Merged:</strong> All {{ images.length }} pages in 1 VLM API Call (Saves ~75% Tokens & RPM)</span>
+      <span *ngIf="images.length === 1"><strong>Single Page:</strong> Direct VLM API Call</span>
+    </div>
+  </div>
+
+  <!-- Thumbnails Strip (Loaded Images) -->
+  <div *ngIf="images.length > 0" class="thumbnails-section">
+    <div class="thumbnails-header">
+      <span class="section-title">Loaded Pages / Images ({{ images.length }})</span>
+      <span class="section-hint">Rotate or adjust contrast before OCR if handwriting is faint</span>
+    </div>
+
+    <div class="thumbnail-strip">
+      <div 
+        *ngFor="let item of images; let idx = index" 
+        class="thumb-card" 
+        [class.selected]="selectedImageId === item.id"
+        (click)="selectedImageId = item.id">
+        
+        <img [src]="item.previewUrl" [alt]="item.name" class="thumb-img" />
+
+        <!-- Compression Savings Badge -->
+        <div *ngIf="item.savingsPercent" class="thumb-metrics">
+          <span class="metric-pill pill-save">-{{ item.savingsPercent }}%</span>
+          <span class="metric-pill pill-token">~{{ item.estimatedTokens }} tok</span>
+        </div>
+
+        <!-- Status overlay -->
+        <div *ngIf="item.status === 'processing'" class="thumb-overlay">
+          <i class="pi pi-spin pi-spinner text-primary"></i>
+        </div>
+        <div *ngIf="item.status === 'done'" class="thumb-overlay success">
+          <i class="pi pi-check text-success"></i>
+        </div>
+        <div *ngIf="item.status === 'error'" class="thumb-overlay danger" [pTooltip]="item.errorMessage">
+          <i class="pi pi-exclamation-triangle text-danger"></i>
+        </div>
+
+        <!-- Quick Action Buttons -->
+        <div class="thumb-actions">
+          <button pButton type="button" icon="pi pi-refresh" class="p-button-xs p-button-rounded p-button-secondary" (click)="rotateImage(item, $event)" title="Rotate 90°"></button>
+          <button pButton type="button" icon="pi pi-sliders-h" class="p-button-xs p-button-rounded" [class.p-button-primary]="item.contrastBoost" [class.p-button-secondary]="!item.contrastBoost" (click)="toggleContrast(item, $event)" title="Boost Ink Contrast"></button>
+          <button pButton type="button" icon="pi pi-trash" class="p-button-xs p-button-rounded p-button-danger" (click)="removeImage(item.id, $event)" title="Remove Image"></button>
+        </div>
+
+        <div class="thumb-footer">
+          <span>Page {{ idx + 1 }}</span>
+          <span *ngIf="item.compressedSizeBytes" class="thumb-size">{{ formatBytes(item.compressedSizeBytes) }}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Progress Bar during OCR processing -->
+  <div *ngIf="isProcessing" class="progress-section">
+    <div class="progress-info">
+      <span>{{ progressStatus }}</span>
+      <span>{{ progressPercent }}%</span>
+    </div>
+    <p-progressBar [value]="progressPercent" [showValue]="false"></p-progressBar>
+  </div>
+
+  <!-- Run Action Button -->
+  <div class="action-footer" *ngIf="images.length > 0 && !isProcessing">
+    <button 
+      pButton 
+      type="button" 
+      [label]="images.length > 1 ? '⚡ Run Bulk OCR (' + images.length + ' Pages Merged in 1 API Call)' : '⚡ Run OCR Extraction (1 Page)'" 
+      icon="pi pi-bolt" 
+      class="p-button-primary p-button-lg run-ocr-btn"
+      (click)="runOcr()">
+    </button>
+    <div class="footer-hint" *ngIf="images.length > 1">
+      <i class="pi pi-info-circle me-1"></i> Continuous slip numbering (Slip 1, Slip 2, ...) and rates will be unified into a single master sheet.
+    </div>
+  </div>
+</div>

@@ -1,0 +1,24 @@
+{
+  "name": "sutramvision",
+  "version": "1.0.0-beta.1",
+  "description": "Visual Document & Handwriting OCR AI engine for Sutram Eco-System. Tabular registers (Aawak-Jawak), handwritten invoices, multi-VLM provider adapters, free credit token optimization, and active correction memory.",
+  "main": "index.js",
+  "keywords": [
+    "sutram",
+    "sutramvision",
+    "ocr",
+    "vlm",
+    "handwriting",
+    "gemini",
+    "groq",
+    "openai",
+    "tabular",
+    "register",
+    "invoice"
+  ],
+  "author": "Antigravity & Sutram Development Team",
+  "license": "MIT",
+  "peerDependencies": {
+    "express": ">=4.0.0"
+  }
+}

@@ -1,0 +1,320 @@
+<p-dialog
+  [(visible)]="visible"
+  [modal]="true"
+  [dismissableMask]="!isCreating"
+  [draggable]="false"
+  [resizable]="false"
+  [style]="{ width: '96vw', maxWidth: '640px' }"
+  styleClass="sutram-create-project-dialog"
+  [header]="activeMode === 'upload' ? 'विद्यमान डेटाबेस जोड़ें (Attach / Upload DB)' : 'नया प्रोजेक्ट बनाएं (Create New Project)'"
+  (onHide)="close()">
+
+  <div class="create-project-body">
+    <!-- ── Mode Selector Tabs ──────────────────────────────────────── -->
+    <div class="mode-tabs" *ngIf="!showConsole">
+      <button
+        type="button"
+        class="mode-tab-btn"
+        [class.active]="activeMode === 'blank'"
+        (click)="switchMode('blank')">
+        <i class="pi pi-plus-circle"></i>
+        <span>नया रिक्त प्रोजेक्ट (New Blank Project)</span>
+      </button>
+
+      <button
+        type="button"
+        class="mode-tab-btn"
+        [class.active]="activeMode === 'upload'"
+        (click)="switchMode('upload')">
+        <i class="pi pi-upload"></i>
+        <span>डेटाबेस चुनें / अपलोड करें (Select / Upload DB)</span>
+      </button>
+    </div>
+
+    <!-- ── Intro Notice ───────────────────────────────────────────── -->
+    <div class="intro-banner" *ngIf="!showConsole">
+      <div class="intro-icon" [style.background-color]="selectedColor + '20'" [style.color]="selectedColor">
+        <i [class]="activeMode === 'upload' ? 'pi pi-database' : selectedIcon"></i>
+      </div>
+      <div class="intro-text">
+        <h3 *ngIf="activeMode === 'blank'">नया रिक्त डेटाबेस (New Blank Database)</h3>
+        <h3 *ngIf="activeMode === 'upload'">विद्यमान SQLite डेटाबेस जोड़ें (Attach Existing DB)</h3>
+        <p *ngIf="activeMode === 'blank'">प्रत्येक प्रोजेक्ट का अपना स्वतंत्र SQLite डेटाबेस और एडमिन सुरक्षा मॉडल होता है।</p>
+        <p *ngIf="activeMode === 'upload'">डेटाबेस का चयन करें। सूत्रम उसकी संरचना पहचानकर स्वतः सूत्रम क्षमताएं जोड़ देगा।</p>
+      </div>
+    </div>
+
+    <!-- ── Error Alert ────────────────────────────────────────────── -->
+    <div *ngIf="errorMessage && !showConsole" class="error-banner">
+      <i class="pi pi-exclamation-triangle"></i>
+      <span>{{ errorMessage }}</span>
+    </div>
+
+    <!-- ── Upload DB Section (When Upload Mode Active) ─────────────── -->
+    <div class="db-upload-section" *ngIf="activeMode === 'upload' && !showConsole">
+      <!-- File Selector Button -->
+      <div class="file-picker-box" *ngIf="!inspectionReport">
+        <input
+          #fileInput
+          type="file"
+          accept=".db,.sqlite,.sqlite3"
+          (change)="onFileSelected($event)"
+          style="display: none;" />
+        <button
+          pButton
+          type="button"
+          class="p-button-outlined p-button-sm upload-trigger-btn"
+          icon="pi pi-upload"
+          label="SQLite फ़ाइल चुनें (.db, .sqlite)"
+          [loading]="isUploading"
+          (click)="fileInput.click()">
+        </button>
+        <span class="file-hint">कंप्यूटर से कोई भी SQLite डेटाबेस फ़ाइल चुनें</span>
+      </div>
+
+      <!-- Quick Inspection Overview Card -->
+      <div class="inspection-overview-card" *ngIf="inspectionReport">
+        <div class="overview-header">
+          <div class="file-identity">
+            <i class="pi pi-database db-icon"></i>
+            <div class="file-names">
+              <span class="file-name">{{ inspectionReport.fileName || uploadedFileName }}</span>
+              <span class="file-size">{{ formatFileSize(inspectionReport.fileSize) }}</span>
+            </div>
+          </div>
+          <button
+            pButton
+            type="button"
+            class="p-button-text p-button-sm change-file-btn"
+            icon="pi pi-refresh"
+            label="फ़ाइल बदलें"
+            (click)="resetFileSelection(fileInput)">
+          </button>
+        </div>
+
+        <!-- Status Pill -->
+        <div class="status-banner" [class.sutram-banner]="inspectionReport.isSutramDB" [class.universal-banner]="!inspectionReport.isSutramDB">
+          <i class="pi" [ngClass]="inspectionReport.isSutramDB ? 'pi-check-circle' : 'pi-bolt'"></i>
+          <div class="banner-text">
+            <span class="banner-title" *ngIf="inspectionReport.isSutramDB">
+              ✓ विद्यमान सूत्रम डेटाबेस (Sutram DB v{{ inspectionReport.engineVersion || 1 }})
+            </span>
+            <span class="banner-title" *ngIf="!inspectionReport.isSutramDB">
+              ⚡ यूनिवर्सल SQLite डेटाबेस (Universal SQLite DB)
+            </span>
+            <span class="banner-subtitle" *ngIf="inspectionReport.isSutramDB">
+              यह डेटाबेस पहले से सूत्रम-सक्षम है। सभी ट्रिगर्स एवं शीट्स तुरंत लोड होंगी।
+            </span>
+            <span class="banner-subtitle" *ngIf="!inspectionReport.isSutramDB">
+              सूत्रम क्षमता (sys_* एवं xls_*) बिना किसी मूल डेटा बदलाव के स्वतः जोड़ दी जाएगी।
+            </span>
+          </div>
+        </div>
+
+        <!-- Tables Chips List -->
+        <div class="tables-summary" *ngIf="inspectionReport.tables && inspectionReport.tables.length > 0">
+          <div class="tables-label-row">
+            <span class="tables-label">पहचानी गई टेबल्स ({{ inspectionReport.tablesCount }}):</span>
+          </div>
+          <div class="tables-chips">
+            <span class="table-chip" *ngFor="let t of inspectionReport.tables">
+              <span class="tbl-name">{{ t.name }}</span>
+              <span class="tbl-count" *ngIf="t.rowCount !== undefined">({{ t.rowCount | number }})</span>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Live Command Log Console View ──────────────────────────── -->
+    <div class="console-terminal-view" *ngIf="showConsole">
+      <div class="terminal-header">
+        <div class="terminal-dots">
+          <span class="dot red"></span>
+          <span class="dot yellow"></span>
+          <span class="dot green"></span>
+        </div>
+        <span class="terminal-title">Sutram Engine Console — Operation Logs</span>
+        <span class="terminal-status" *ngIf="!isCreating && createdProject">
+          <i class="pi pi-check"></i> पूर्ण (Completed)
+        </span>
+      </div>
+      <div class="terminal-body" #consoleScroll>
+        <div class="log-line" *ngFor="let l of commandLogs">
+          <span class="log-prompt">&gt;</span>
+          <span class="log-text">{{ l }}</span>
+        </div>
+        <div class="log-cursor" *ngIf="isCreating">_</div>
+      </div>
+      <!-- Success Note when complete -->
+      <div class="terminal-footer-hint" *ngIf="!isCreating && createdProject">
+        <i class="pi pi-info-circle"></i>
+        <span>सेटअप पूरा हो गया है। आप ऊपर स्थिति लॉग देख सकते हैं, फिर प्रोजेक्ट खोलने के लिए 'प्रोजेक्ट खोलें' दबाएं।</span>
+      </div>
+    </div>
+
+    <!-- ── Project Form Fields (Always Shared) ────────────────────── -->
+    <div class="form-grid" *ngIf="!showConsole">
+      <!-- 1. Project Name -->
+      <div class="form-group full-width">
+        <label class="form-label">प्रोजेक्ट का नाम (Project Name) <span class="required">*</span></label>
+        <input
+          type="text"
+          pInputText
+          class="p-inputtext-sm w-full"
+          [(ngModel)]="projectName"
+          placeholder="उदा. Dental Hospital ERP, Shree Krishna Traders, Retail Inventory"
+          autofocus />
+      </div>
+
+      <!-- 2. Live Slug Preview -->
+      <div class="form-group full-width slug-preview-group" *ngIf="calculatedSlug">
+        <label class="form-label">डेटाबेस फ़ाइल पहचानकर्ता (Database Slug)</label>
+        <div class="slug-pill">
+          <i class="pi pi-database pill-icon"></i>
+          <span class="slug-text font-mono">{{ calculatedDbFile }}</span>
+          <span class="slug-hint">✓ स्वतः लोअरकेस एवं स्पेस _ में परिवर्तित</span>
+        </div>
+      </div>
+
+      <!-- 3. Description -->
+      <div class="form-group full-width">
+        <label class="form-label">विवरण (Description / Details)</label>
+        <input
+          type="text"
+          pInputText
+          class="p-inputtext-sm w-full"
+          [(ngModel)]="projectDesc"
+          placeholder="उदा. अस्पताल रिकॉर्ड्स, बिलिंग एवं इन्वेंट्री प्रबंधन" />
+      </div>
+
+      <!-- 4. In-Project Administrator Details -->
+      <div class="form-section-title full-width">
+        <i class="pi pi-shield"></i>
+        <span>प्रोजेक्ट एडमिनिस्ट्रेटर क्रेडेंशियल (In-Project Admin Credentials)</span>
+      </div>
+
+      <div class="form-group half-width">
+        <label class="form-label">एडमिन यूज़रनेम (Admin Username)</label>
+        <input
+          type="text"
+          pInputText
+          class="p-inputtext-sm w-full font-mono"
+          [(ngModel)]="adminUsername"
+          placeholder="admin" />
+      </div>
+
+      <div class="form-group half-width">
+        <label class="form-label">
+          एडमिन पासवर्ड (Admin Password)
+          <span class="optional-hint">(वैकल्पिक / Optional)</span>
+        </label>
+        <p-password
+          [(ngModel)]="adminPassword"
+          [toggleMask]="true"
+          [feedback]="false"
+          styleClass="w-full p-inputtext-sm"
+          placeholder="खाली छोड़ने पर डिफ़ॉल्ट 'admin' रहेगा">
+        </p-password>
+      </div>
+
+      <!-- 5. Appearance: Color Accent & Icon -->
+      <div class="form-section-title full-width">
+        <i class="pi pi-palette"></i>
+        <span>थीम रंग एवं आइकन (Theme Accent & Icon)</span>
+      </div>
+
+      <div class="form-group full-width">
+        <label class="form-label">कलर एक्सेंट (Color Accent):</label>
+        <div class="color-palette">
+          <button
+            type="button"
+            *ngFor="let c of colorPresets"
+            class="color-dot"
+            [style.background-color]="c"
+            [class.active]="selectedColor === c"
+            (click)="selectedColor = c">
+            <i class="pi pi-check check-mark" *ngIf="selectedColor === c"></i>
+          </button>
+        </div>
+      </div>
+
+      <div class="form-group full-width">
+        <label class="form-label">प्रतीक आइकन (Icon):</label>
+        <div class="icon-selector">
+          <button
+            type="button"
+            *ngFor="let opt of iconPresets"
+            class="icon-btn"
+            [class.active]="selectedIcon === opt.icon"
+            (click)="selectedIcon = opt.icon"
+            [title]="opt.label">
+            <i [class]="opt.icon"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <ng-template pTemplate="footer">
+    <div class="modal-footer-actions">
+      <!-- Standard Mode: Cancel -->
+      <button
+        *ngIf="!showConsole"
+        pButton
+        type="button"
+        label="रद्द करें (Cancel)"
+        class="p-button-text p-button-sm p-button-secondary"
+        (click)="close()"
+        [disabled]="isCreating">
+      </button>
+
+      <!-- Standard Mode: Submit -->
+      <button
+        *ngIf="!showConsole"
+        pButton
+        type="button"
+        [label]="activeMode === 'upload' ? 'डेटाबेस जोड़ें एवं शुरू करें' : 'प्रोजेक्ट बनाएं और खोलें'"
+        icon="pi pi-arrow-right"
+        iconPos="right"
+        class="p-button-primary p-button-sm"
+        [loading]="isCreating"
+        (click)="submitCreate()">
+      </button>
+
+      <!-- Console Mode (Processing) -->
+      <button
+        *ngIf="showConsole && isCreating"
+        pButton
+        type="button"
+        label="प्रक्रिया जारी है (Setting up...)"
+        icon="pi pi-spin pi-spinner"
+        class="p-button-sm p-button-outlined p-button-secondary"
+        [disabled]="true">
+      </button>
+
+      <!-- Console Mode (Completed): User can inspect logs, then Close or Open -->
+      <ng-container *ngIf="showConsole && !isCreating">
+        <button
+          pButton
+          type="button"
+          label="बंद करें (Close)"
+          icon="pi pi-times"
+          class="p-button-text p-button-sm p-button-secondary"
+          (click)="close()">
+        </button>
+
+        <button
+          *ngIf="createdProject"
+          pButton
+          type="button"
+          label="प्रोजेक्ट खोलें (Open Project)"
+          icon="pi pi-external-link"
+          iconPos="right"
+          class="p-button-success p-button-sm"
+          (click)="launchCreatedProject()">
+        </button>
+      </ng-container>
+    </div>
+  </ng-template>
+</p-dialog>

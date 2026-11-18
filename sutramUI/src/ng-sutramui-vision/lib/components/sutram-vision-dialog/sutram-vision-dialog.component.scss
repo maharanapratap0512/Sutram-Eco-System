@@ -1,0 +1,120 @@
+.vision-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding-right: 28px;
+
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+
+    .header-icon-box {
+      width: 40px;
+      height: 40px;
+      border-radius: 8px;
+      background: rgba(236, 72, 153, 0.12);
+      border: 1px solid rgba(236, 72, 153, 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+
+      i {
+        font-size: 1.25rem;
+        color: #ec4899;
+      }
+    }
+
+    .header-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: var(--erp-text, #0f172a);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+
+      .hindi-subtext {
+        font-size: 0.85rem;
+        font-weight: 500;
+        color: var(--erp-text-muted, #64748b);
+      }
+    }
+
+    .header-subtitle {
+      font-size: 0.8rem;
+      color: var(--erp-text-muted, #64748b);
+      margin-top: 1px;
+    }
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    .profile-vault-btn {
+      font-size: 0.85rem;
+      border-color: rgba(99, 102, 241, 0.4);
+      color: var(--erp-primary, #6366f1);
+    }
+  }
+}
+
+.vision-dialog-body {
+  width: 100%;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Dark Mode Overrides (Rules 20 & 21)
+// ─────────────────────────────────────────────────────────────
+:host(.dark-mode),
+::ng-deep body.dark-mode {
+  .vision-dialog-header {
+    .header-left {
+      .header-title {
+        color: var(--erp-text, #f8fafc);
+      }
+    }
+  }
+
+  .p-dialog.sutram-vision-modal {
+    .p-dialog-header {
+      background: var(--erp-surface, #1e293b) !important;
+      border-bottom: 1px solid var(--erp-surface-border, #334155) !important;
+    }
+
+    .p-dialog-content {
+      background: var(--erp-bg, #0f172a) !important;
+      color: var(--erp-text, #f8fafc) !important;
+    }
+  }
+
+  ::ng-deep .p-toast {
+    z-index: 100000 !important;
+
+    .p-toast-message {
+      background: var(--erp-surface, #1e293b) !important;
+      color: var(--erp-text, #f8fafc) !important;
+      border: 1px solid var(--erp-surface-border, #334155) !important;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5) !important;
+
+      .p-toast-message-content {
+        color: var(--erp-text, #f8fafc) !important;
+
+        .p-toast-summary {
+          color: var(--erp-text, #f8fafc) !important;
+          font-weight: 700 !important;
+        }
+
+        .p-toast-detail {
+          color: var(--erp-text-muted, #94a3b8) !important;
+        }
+
+        .p-toast-icon-close {
+          color: var(--erp-text-muted, #94a3b8) !important;
+        }
+      }
+    }
+  }
+}

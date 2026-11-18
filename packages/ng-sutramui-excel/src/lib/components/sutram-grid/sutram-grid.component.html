@@ -1,0 +1,673 @@
+<div class="sutram-grid-wrapper" (contextmenu)="$event.preventDefault()">
+
+  <!-- 1. Sleek Pixel-Perfect Custom Context Menu (Replaces p-contextMenu) -->
+  <div *ngIf="contextMenuState.visible"
+       class="custom-context-menu shadow-lg"
+       [style.top.px]="contextMenuState.y"
+       [style.left.px]="contextMenuState.x"
+       (click)="$event.stopPropagation()">
+
+    <!-- Cell Actions (Copy, Cut, Paste, Mask/Unmask Cell & Column) -->
+    <ng-container *ngIf="contextMenuState.type === 'cell'">
+      <div class="context-menu-item" (click)="copyActiveCell()">
+        <i class="pi pi-copy"></i>
+        <span>Copy</span>
+        <kbd class="ms-auto">Ctrl+C</kbd>
+      </div>
+      <div class="context-menu-item" (click)="cutActiveCell()">
+        <i class="pi pi-file-edit"></i>
+        <span>Cut</span>
+        <kbd class="ms-auto">Ctrl+X</kbd>
+      </div>
+      <div class="context-menu-item" (click)="pasteToActiveCell()">
+        <i class="pi pi-clipboard"></i>
+        <span>Paste</span>
+        <kbd class="ms-auto">Ctrl+V</kbd>
+      </div>
+      <div class="context-menu-divider"></div>
+
+      <!-- Mask / Unmask Actions for Password Column Cell -->
+      <ng-container *ngIf="isPasswordColumn(contextMenuState.col)">
+        <!-- 1. Per-Cell Unmask/Mask -->
+        <div class="context-menu-item" (click)="toggleMaskActiveCell()">
+          <i class="pi" [ngClass]="isCellUnmasked(contextMenuState.rowIdx, contextMenuState.colKey) ? 'pi-lock text-warning' : 'pi-lock-open text-primary'"></i>
+          <span [class.text-primary]="!isCellUnmasked(contextMenuState.rowIdx, contextMenuState.colKey)">
+            {{ isCellUnmasked(contextMenuState.rowIdx, contextMenuState.colKey) ? 'Mask Cell' : 'Unmask Cell' }}
+          </span>
+          <span class="badge-pwd-tag ms-auto" [class.unmasked]="isCellUnmasked(contextMenuState.rowIdx, contextMenuState.colKey)">
+            {{ isCellUnmasked(contextMenuState.rowIdx, contextMenuState.colKey) ? 'Visible' : 'Masked' }}
+          </span>
+        </div>
+
+        <!-- 2. Full Column Unmask/Mask shortcut -->
+        <div class="context-menu-item" (click)="toggleMaskSelectedColumn()">
+          <i class="pi" [ngClass]="isColumnUnmasked(contextMenuState.colKey) ? 'pi-lock text-warning' : 'pi-lock-open text-primary'"></i>
+          <span>
+            {{ isColumnUnmasked(contextMenuState.colKey) ? 'Mask Column' : 'Unmask Column' }}
+          </span>
+        </div>
+        <div class="context-menu-divider"></div>
+      </ng-container>
+    </ng-container>
+
+    <!-- Column Header Actions (Copy, Cut, Paste, Hide, Freeze, Mask/Unmask, Format) -->
+    <ng-container *ngIf="contextMenuState.type === 'column'">
+      <div class="context-menu-item" (click)="copySelectedColumn()">
+        <i class="pi pi-copy"></i>
+        <span>Copy Column</span>
+        <kbd class="ms-auto">Ctrl+C</kbd>
+      </div>
+      <div class="context-menu-item" (click)="cutSelectedColumn()">
+        <i class="pi pi-file-edit"></i>
+        <span>Cut Column</span>
+      </div>
+      <div class="context-menu-item" (click)="pasteToSelectedColumn()">
+        <i class="pi pi-clipboard"></i>
+        <span>Paste Column</span>
+      </div>
+      <div class="context-menu-divider"></div>
+
+      <!-- Hide Column -->
+      <div class="context-menu-item" (click)="hideSelectedColumn()">
+        <i class="pi pi-eye-slash"></i>
+        <span>Hide Column</span>
+      </div>
+
+      <div class="context-menu-divider"></div>
+
+      <!-- ── Advanced Freeze Options (Header Freeze & Column Shift-Left Freeze) ── -->
+      <!-- 1. Freeze Current Column -->
+      <div *ngIf="!isColumnFrozen(contextMenuState.col)"
+           class="context-menu-item"
+           (click)="onFreezeColumnClick()">
+        <i class="pi pi-lock text-primary"></i>
+        <span>Freeze Column</span>
+      </div>
+
+      <!-- 2. Freeze Columns up to this Column -->
+      <div *ngIf="!isColumnFrozen(contextMenuState.col)"
+           class="context-menu-item"
+           (click)="onFreezeToHereClick()">
+        <i class="pi pi-arrow-left text-primary"></i>
+        <span>Freeze to this Column</span>
+      </div>
+
+      <!-- 3. Unfreeze This Column -->
+      <div *ngIf="isColumnFrozen(contextMenuState.col)"
+           class="context-menu-item"
+           (click)="onUnfreezeColumnClick()">
+        <i class="pi pi-unlock text-warning"></i>
+        <span>Unfreeze Column</span>
+      </div>
+
+      <!-- 4. Unfreeze All Columns -->
+      <div *ngIf="frozenColKeys.length > 0"
+           class="context-menu-item"
+           (click)="onUnfreezeAllColumnsClick()">
+        <i class="pi pi-refresh text-muted"></i>
+        <span>Unfreeze All Columns</span>
+        <span class="badge-freeze-tag ms-auto">{{ frozenColKeys.length }}</span>
+      </div>
+
+      <!-- 5. Freeze Header Row Toggle -->
+      <div class="context-menu-item" (click)="toggleHeaderFreeze()">
+        <i class="pi" [ngClass]="isHeaderFrozen ? 'pi-check-circle text-primary' : 'pi-circle'"></i>
+        <span>{{ isHeaderFrozen ? 'Unfreeze Header Row' : 'Freeze Header Row' }}</span>
+        <span class="badge-freeze-tag ms-auto" *ngIf="isHeaderFrozen">Frozen</span>
+      </div>
+
+      <div class="context-menu-divider"></div>
+
+      <!-- Mask / Unmask (Password Column) -->
+      <ng-container *ngIf="isPasswordColumn(contextMenuState.col)">
+        <div class="context-menu-item" (click)="toggleMaskSelectedColumn()">
+          <i class="pi" [ngClass]="isColumnUnmasked(contextMenuState.colKey) ? 'pi-lock text-warning' : 'pi-lock-open text-primary'"></i>
+          <span [class.text-primary]="!isColumnUnmasked(contextMenuState.colKey)">
+            {{ isColumnUnmasked(contextMenuState.colKey) ? 'Mask Column' : 'Unmask Column' }}
+          </span>
+          <span class="badge-pwd-tag ms-auto" [class.unmasked]="isColumnUnmasked(contextMenuState.colKey)">
+            {{ isColumnUnmasked(contextMenuState.colKey) ? 'Visible' : 'Masked' }}
+          </span>
+        </div>
+        <div class="context-menu-divider"></div>
+      </ng-container>
+
+      <!-- ── Format Menu with Rich Hover Submenu ── -->
+      <div class="context-menu-item has-submenu"
+           (mouseenter)="openSubmenu('format', $event)"
+           (mouseleave)="closeSubmenu()">
+        <i class="pi pi-sliders-h text-primary"></i>
+        <span>Format</span>
+        <i class="pi pi-chevron-right ms-auto submenu-arrow"></i>
+
+        <!-- Flyout Submenu for Supporting Format Data -->
+        <div class="context-submenu shadow-lg"
+             [class.submenu-flip-left]="submenuFlipLeft"
+             *ngIf="activeSubmenu === 'format'">
+
+          <!-- A. Date Column Formatting Submenu -->
+          <ng-container *ngIf="isDateColumn(contextMenuState.col)">
+            <div class="context-submenu-header">Date Formats</div>
+            <div *ngFor="let fmt of dateFormatOptions"
+                 class="context-menu-item"
+                 [class.active-format]="contextMenuState.col?.display_format === fmt.value"
+                 (click)="selectColumnFormat(contextMenuState.col, fmt.value, $event)">
+              <i class="pi" [ngClass]="contextMenuState.col?.display_format === fmt.value ? 'pi-check text-primary font-bold' : 'pi-calendar'"></i>
+              <span>{{ fmt.label }}</span>
+              <span class="fmt-preview ms-auto">{{ fmt.preview }}</span>
+            </div>
+          </ng-container>
+
+          <!-- B. Number Column Formatting Submenu -->
+          <ng-container *ngIf="isNumberColumn(contextMenuState.col) && !isDateColumn(contextMenuState.col)">
+            <div class="context-submenu-header">Number Formats</div>
+            <div *ngFor="let fmt of numberFormatOptions"
+                 class="context-menu-item"
+                 [class.active-format]="contextMenuState.col?.display_format === fmt.value"
+                 (click)="selectColumnFormat(contextMenuState.col, fmt.value, $event)">
+              <i class="pi" [ngClass]="contextMenuState.col?.display_format === fmt.value ? 'pi-check text-primary font-bold' : 'pi-percentage'"></i>
+              <span>{{ fmt.label }}</span>
+              <span class="fmt-preview ms-auto">{{ fmt.preview }}</span>
+            </div>
+          </ng-container>
+
+          <!-- C. Text & Other Column Align Submenu -->
+          <ng-container *ngIf="!isDateColumn(contextMenuState.col) && !isNumberColumn(contextMenuState.col) && !isPasswordColumn(contextMenuState.col)">
+            <div class="context-submenu-header">Text Alignment</div>
+            <div class="context-menu-item"
+                 [class.active-format]="textAlign === 'left'"
+                 (click)="setTextAlignForColumn('left', $event)">
+              <i class="pi pi-align-left"></i>
+              <span>Align Left</span>
+            </div>
+            <div class="context-menu-item"
+                 [class.active-format]="textAlign === 'center'"
+                 (click)="setTextAlignForColumn('center', $event)">
+              <i class="pi pi-align-center"></i>
+              <span>Align Center</span>
+            </div>
+            <div class="context-menu-item"
+                 [class.active-format]="textAlign === 'right'"
+                 (click)="setTextAlignForColumn('right', $event)">
+              <i class="pi pi-align-right"></i>
+              <span>Align Right</span>
+            </div>
+          </ng-container>
+
+          <!-- D. Password Column Info inside Submenu -->
+          <ng-container *ngIf="isPasswordColumn(contextMenuState.col)">
+            <div class="context-submenu-header">Password Security</div>
+            <div class="context-menu-item" (click)="toggleMaskSelectedColumn()">
+              <i class="pi" [ngClass]="isColumnUnmasked(contextMenuState.colKey) ? 'pi-lock text-warning' : 'pi-lock-open text-primary'"></i>
+              <span>{{ isColumnUnmasked(contextMenuState.colKey) ? 'Mask Column' : 'Unmask Column' }}</span>
+            </div>
+          </ng-container>
+
+        </div>
+      </div>
+    </ng-container>
+
+    <!-- Copy Row (Row Header Action) -->
+    <ng-container *ngIf="contextMenuState.type === 'row'">
+      <div class="context-menu-item" (click)="copySelectedRow()">
+        <i class="pi pi-copy"></i>
+        <span>Copy Row</span>
+      </div>
+      <div class="context-menu-divider"></div>
+
+      <!-- Row Operations (Insert Above, Insert Below, Duplicate Row) -->
+      <div class="context-menu-item" (click)="insertRowAbove()">
+        <i class="pi pi-arrow-up"></i>
+        <span>Insert Row Above</span>
+      </div>
+      <div class="context-menu-item" (click)="insertRowBelow()">
+        <i class="pi pi-arrow-down"></i>
+        <span>Insert Row Below</span>
+      </div>
+      <div class="context-menu-item" (click)="duplicateRow()">
+        <i class="pi pi-clone"></i>
+        <span>Duplicate Row</span>
+      </div>
+
+      <!-- Toggle Row Highlight (Bookmark Action) -->
+      <div class="context-menu-divider"></div>
+      <div class="context-menu-item" (click)="toggleRowHighlight()">
+        <i class="pi" [ngClass]="isRowHighlighted(contextMenuState.row) ? 'pi-bookmark-fill' : 'pi-bookmark'" [style.color]="isRowHighlighted(contextMenuState.row) ? '#f59e0b' : 'inherit'"></i>
+        <span [style.fontWeight]="isRowHighlighted(contextMenuState.row) ? '600' : 'normal'">
+          {{ isRowHighlighted(contextMenuState.row) ? 'Remove Highlight' : 'Highlight Row' }}
+        </span>
+        <span *ngIf="isRowHighlighted(contextMenuState.row)" class="badge-hl-tag ms-auto">HL</span>
+      </div>
+
+      <!-- Delete Row (Soft Red) -->
+      <ng-container *ngIf="enableDelete">
+        <div class="context-menu-divider"></div>
+        <div class="context-menu-item text-danger" (click)="deleteRow()">
+          <i class="pi pi-trash" style="color: #ef4444;"></i>
+          <span style="color: #ef4444; font-weight: 600;">Delete Row</span>
+        </div>
+      </ng-container>
+    </ng-container>
+  </div>
+
+  <!-- 2. Floating Smart FK Reference Dropdown Menu (Smart Mode live lookup) -->
+  <div *ngIf="dropdownOpen && isFkColumn(editingColDef)"
+       class="ref-dropdown-menu shadow-lg"
+       [style.top.px]="dropdownPos.top"
+       [style.left.px]="dropdownPos.left"
+       [style.min-width.px]="dropdownPos.minWidth"
+       (mousedown)="$event.preventDefault()">
+
+    <div class="ref-dropdown-header">
+      <span>Select {{ editingColDef?.ref_table || editingColDef?.name }} ({{ dropdownOptions.length }})</span>
+      <small style="opacity: 0.8; font-weight: 400;">↑↓ to navigate, Enter to select</small>
+    </div>
+
+    <div class="ref-dropdown-items-wrap" style="max-height: 185px; overflow-y: auto;">
+      <div *ngFor="let opt of dropdownOptions; let i = index"
+           class="ref-dropdown-item"
+           [class.highlighted]="i === highlightedIdx"
+           (mousedown)="selectDropdownOption(opt, $event, true)">
+        <span class="ref-item-label text-truncate">{{ opt.display }}</span>
+        <span *ngIf="opt.code && !opt.display.includes(opt.code)" class="ref-item-badge">{{ opt.code }}</span>
+      </div>
+
+      <div *ngIf="dropdownOptions.length === 0" class="ref-dropdown-empty">
+        <i class="pi pi-search me-1"></i>
+        No matching {{ editingColDef?.ref_table || editingColDef?.name }} found
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. Excel-like Column Header Filter & Sort Popover -->
+  <p-overlayPanel #colFilterOp
+                  [showCloseIcon]="false"
+                  [dismissable]="true"
+                  styleClass="sutram-col-filter-popover shadow-lg">
+    <ng-template pTemplate="content">
+      <div *ngIf="activeFilterCol" class="filter-popover-content">
+        <!-- Popover Header -->
+        <div class="popover-header">
+          <div class="popover-title text-truncate">
+            <i class="pi pi-filter-fill text-primary"></i>
+            <span class="col-name text-truncate" [title]="activeFilterCol.name">{{ activeFilterCol.name }}</span>
+            <span *ngIf="activeFilterCol.ref_table || activeFilterCol.type === 'ref'" class="badge-type">
+              {{ activeFilterCol.ref_table || 'ref' }}
+            </span>
+            <i *ngIf="isFilterLoading" class="pi pi-spin pi-spinner text-primary ms-1" style="font-size: 11px;" title="Fetching from database..."></i>
+          </div>
+          <button type="button" class="btn-popover-close" (click)="colFilterOp.hide()" title="Close">
+            <i class="pi pi-times"></i>
+          </button>
+        </div>
+
+        <!-- Search Bar -->
+        <div class="popover-search-wrap">
+          <i class="pi pi-search search-icon"></i>
+          <input type="text"
+                 class="popover-search-input"
+                 placeholder="Search in list..."
+                 [(ngModel)]="filterChecklistSearch" />
+          <button *ngIf="filterChecklistSearch"
+                  type="button"
+                  class="btn-clear-search-inline"
+                  (click)="filterChecklistSearch = ''">
+            <i class="pi pi-times"></i>
+          </button>
+        </div>
+
+        <!-- Action Strip: Select All & Quick Links -->
+        <div class="popover-action-strip">
+          <label class="select-all-label">
+            <input type="checkbox"
+                   class="custom-check"
+                   [checked]="isAllChecklistSelected()"
+                   (change)="toggleSelectAllChecklist($event)" />
+            <span>(Select All)</span>
+          </label>
+          <div class="quick-links">
+            <button type="button" class="btn-link-action" (click)="selectAllFilteredItems()">All</button>
+            <span class="divider">·</span>
+            <button type="button" class="btn-link-action" (click)="clearAllFilteredItems()">Clear</button>
+          </div>
+          <span class="count-pill">
+            <i *ngIf="isFilterLoading" class="pi pi-spin pi-spinner me-1"></i>{{ selectedChecklistValues.size }} / {{ currentChecklistItems.length }}
+          </span>
+        </div>
+
+        <!-- Checklist Values Container -->
+        <div class="popover-checklist-items">
+          <div *ngFor="let item of filteredChecklistItems"
+               class="checklist-item"
+               (click)="toggleChecklistItem(item.value)">
+            <div class="item-left text-truncate">
+              <input type="checkbox"
+                     class="custom-check"
+                     [checked]="selectedChecklistValues.has(item.value)"
+                     (click)="$event.stopPropagation()"
+                     (change)="toggleChecklistItem(item.value)" />
+              <span class="item-label text-truncate" [title]="item.display">
+                {{ item.display }}
+              </span>
+            </div>
+            <div class="item-right">
+              <span *ngIf="item.code" class="item-code-chip">{{ item.code }}</span>
+              <span *ngIf="item.count !== undefined && item.count > 0" class="item-count-badge">{{ item.count }}</span>
+            </div>
+          </div>
+
+          <div *ngIf="isFilterLoading && filteredChecklistItems.length === 0" class="empty-list-state">
+            <i class="pi pi-spin pi-spinner me-1"></i> Loading distinct values from database...
+          </div>
+          <div *ngIf="!isFilterLoading && filteredChecklistItems.length === 0" class="empty-list-state">
+            <i class="pi pi-search me-1"></i> No matching values
+          </div>
+        </div>
+
+        <!-- Footer Actions -->
+        <div class="popover-footer">
+          <button type="button"
+                  class="btn-filter-clear"
+                  (click)="clearCurrentColFilter(colFilterOp)">
+            <i class="pi pi-trash me-1"></i>Reset
+          </button>
+          <div class="footer-actions-right">
+            <button type="button"
+                    class="btn-filter-cancel"
+                    (click)="colFilterOp.hide()">
+              Cancel
+            </button>
+            <button type="button"
+                    class="btn-filter-apply"
+                    (click)="applyCurrentColFilter(colFilterOp)">
+              <i class="pi pi-check"></i> Apply
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </ng-template>
+  </p-overlayPanel>
+
+  <!-- 4. PrimeNG Virtual Table -->
+  <p-table #pTable
+           [value]="visibleRows"
+           [columns]="headers"
+           [virtualScroll]="true"
+           [virtualScrollItemSize]="23"
+           [virtualScrollOptions]="{ autoSize: false, numToleratedItems: 35 }"
+           [rowTrackBy]="trackByRowNum"
+           [scrollable]="true"
+           scrollHeight="flex"
+           [resizableColumns]="true"
+           columnResizeMode="expand"
+           [reorderableColumns]="true"
+           (onColResize)="onColumnResize($event)"
+           [class.header-unfrozen]="!isHeaderFrozen"
+           styleClass="p-datatable-gridlines p-datatable-sm sutram-grid-table">
+
+    <!-- Table Header Row -->
+    <ng-template pTemplate="header" let-columns>
+      <tr>
+        <!-- Corner Cog Config Trigger -->
+        <th class="corner-th corner-config-th"
+            pFrozenColumn
+            [frozen]="true"
+            style="width: 34px; min-width: 34px; max-width: 34px; text-align: center;"
+            (click)="openConfig.emit($event)" title="Configure Columns (कॉलम चुनें)">
+          <div style="display: flex; align-items: center; justify-content: center;">
+            <i class="pi pi-cog corner-cog-icon" style="font-size: 12px; color: var(--text-muted, #64748b);"></i>
+          </div>
+        </th>
+
+        <!-- Dynamic Schema Columns with Letters (A, B, C...) -->
+        <th *ngFor="let col of headers; let idx = index; trackBy: trackByColKey"
+            pFrozenColumn
+            [frozen]="isColumnFrozen(col, idx)"
+            pResizableColumn
+            pReorderableColumn
+            [style.width.px]="getColumnWidth(col)"
+            [style.min-width.px]="getColumnWidth(col)"
+            [style.max-width.px]="getColumnWidth(col)"
+            class="sutram-th"
+            [class.col-header-selected]="selectedColumnKey === (col.key || col.name)"
+            [class.col-frozen]="isColumnFrozen(col, idx)"
+            [class.col-frozen-boundary]="isLastFrozenColumn(col, idx)"
+            [style.left.px]="isColumnFrozen(col, idx) ? getFrozenLeftOffset(col, idx) : null"
+            (click)="onColumnHeaderClick(col, $event)"
+            (contextmenu)="openColumnContextMenu($event, col)">
+          <div style="display: flex; justify-content: space-between; align-items: center; position: relative; width: 100%;">
+            <span class="col-header-title text-truncate d-flex align-items-center" [title]="col.description || col.short_name || col.name">
+              <strong class="col-letter">{{ getColLetter(idx) }}</strong>
+              <span class="text-truncate col-label-text">{{ col.label || col.short_name || col.name }}</span>
+              <i *ngIf="isColumnFrozen(col, idx)" class="pi pi-lock-fill ms-1" style="font-size: 9px; color: var(--primary, #4f46e5);" title="Frozen Column (फ़्रीज़्ड कॉलम)"></i>
+              <span *ngIf="col.not_null" style="color: #ef4444; margin-left: 2px;">*</span>
+              <i *ngIf="isPasswordColumn(col)" class="pi ms-1" [ngClass]="isColumnUnmasked(col.key || col.name) ? 'pi-lock-open text-primary' : 'pi-lock text-muted'" style="font-size: 10px;" [title]="isColumnUnmasked(col.key || col.name) ? 'Unmasked' : 'Masked (Password)'"></i>
+            </span>
+
+            <!-- Header Action Controls: FK Pill, Sort & Filter Trigger -->
+            <div class="col-header-controls d-flex align-items-center" (click)="$event.stopPropagation()">
+              <span *ngIf="col.is_fk_subcol"
+                    style="font-size: 9px; padding: 1px 4px; background: rgba(16, 185, 129, 0.15); color: #059669; border-radius: 3px; font-weight: 600; margin-right: 4px;"
+                    [title]="'Reference: ' + (col.ref_table || col.group)">
+                {{ col.ref_table || col.group }}
+              </span>
+
+              <span *ngIf="!col.is_fk_subcol && (col.type === 'ref' || col.ref_table || col.is_fk_main)"
+                    style="font-size: 9px; padding: 1px 4px; background: rgba(59, 130, 246, 0.15); color: #2563eb; border-radius: 3px; font-weight: 600; margin-right: 4px;"
+                    [title]="'FK: ' + (col.ref_table || col.name)">
+                {{ col.ref_table || col.name }}
+              </span>
+
+              <span *ngIf="col.is_fk_raw"
+                    style="font-size: 9px; padding: 1px 4px; background: rgba(245, 158, 11, 0.15); color: #d97706; border-radius: 3px; font-weight: 600; margin-right: 4px;"
+                    title="Raw ID">
+                id
+              </span>
+
+              <span *ngIf="col.is_temp || col.is_virtual"
+                    style="font-size: 9px; padding: 1px 4px; background: rgba(139, 92, 246, 0.15); color: #7c3aed; border-radius: 3px; font-weight: 700; margin-right: 4px;"
+                    title="Formula Computed Temp Column (Read-Only)">
+                fx
+              </span>
+
+              <span *ngIf="state.sortingEnabled() && !isPasswordColumn(col)"
+                    class="col-sort-trigger"
+                    [class.is-sorted]="state.activeSort()?.colKey === (col.key || col.name)"
+                    (click)="onSortIconClick(col, $event)"
+                    [title]="state.activeSort()?.colKey === (col.key || col.name) ? (state.activeSort()?.order === 'ASC' ? 'Sorted: ASC' : 'Sorted: DESC') : 'Sort'">
+                <i class="pi"
+                   [ngClass]="state.activeSort()?.colKey === (col.key || col.name)
+                     ? (state.activeSort()?.order === 'ASC' ? 'pi-sort-amount-up-alt text-primary' : 'pi-sort-amount-down text-primary')
+                     : 'pi-sort-alt text-muted'"></i>
+              </span>
+
+              <span *ngIf="state.filtersEnabled() && !isPasswordColumn(col)"
+                    class="col-filter-trigger"
+                    [class.is-filtered]="isColumnFiltered(col.key || col.name)"
+                    (click)="openColumnFilter($event, col, colFilterOp)"
+                    [title]="isColumnFiltered(col.key || col.name) ? 'Filter Active' : 'Filter'">
+                <i class="pi" [ngClass]="isColumnFiltered(col.key || col.name) ? 'pi-filter-fill text-primary' : 'pi-filter'"></i>
+              </span>
+            </div>
+          </div>
+        </th>
+      </tr>
+    </ng-template>
+
+    <!-- Table Body Rows -->
+    <ng-template pTemplate="body" let-row let-rowIndex="rowIndex" let-columns="columns">
+      <tr [class.row-new]="row.isNew && isRowPopulated(row)"
+          [class.row-edited]="!row.isNew && row.isModified"
+          [class.row-has-error]="state.isAuditMode() && row.hasError"
+          [class.row-synced]="row.isSynced"
+          [class.row-selected]="selectedRowIdx === rowIndex"
+          [class.row-highlighted]="isRowHighlighted(row)"
+          [class.row-reminder-critical]="getReminderSeverity(row) === 'critical'"
+          [class.row-reminder-warning]="getReminderSeverity(row) === 'warning'"
+          [class.row-reminder-info]="getReminderSeverity(row) === 'info'">
+
+        <!-- Sticky Row Number TD (34px, Authentic Excel Look) -->
+        <td class="row-num-td"
+            pFrozenColumn
+            [frozen]="true"
+            style="width: 34px; min-width: 34px; max-width: 34px; text-align: center;"
+            (click)="onRowHeaderClick(rowIndex, row, $event)"
+            (contextmenu)="openRowContextMenu($event, row, rowIndex)">
+          <span *ngIf="row.isNew && isRowPopulated(row)" class="row-state-dot dot-new">+</span>
+          <span *ngIf="!row.isNew && row.isModified" class="row-state-dot dot-edited">•</span>
+          <i *ngIf="isRowHighlighted(row)" class="pi pi-bookmark-fill row-hl-icon" title="Highlighted Row"></i>
+          <i *ngIf="getReminderSeverity(row) === 'critical'" class="pi pi-exclamation-circle row-reminder-critical-icon" title="Critical Alert / Permanent"></i>
+          <i *ngIf="getReminderSeverity(row) === 'warning'" class="pi pi-bell row-reminder-warning-icon" title="Warning Watchdog"></i>
+          <i *ngIf="getReminderSeverity(row) === 'info'" class="pi pi-info-circle row-reminder-info-icon" title="Info Reminder"></i>
+          <span class="row-num-text">{{ row.rowNum }}</span>
+        </td>
+
+        <!-- Compact Small Data Cells (23px height) -->
+        <td *ngFor="let col of headers; let cIdx = index; trackBy: trackByColKey"
+            pFrozenColumn
+            [frozen]="isColumnFrozen(col, cIdx)"
+            [class.col-selected]="selectedColumnKey === (col.key || col.name)"
+            [class.readonly-cell]="col.readonly || col.is_fk_subcol || col.is_temp || col.is_virtual"
+            [class.col-frozen]="isColumnFrozen(col, cIdx)"
+            [class.col-frozen-boundary]="isLastFrozenColumn(col, cIdx)"
+            [style.left.px]="isColumnFrozen(col, cIdx) ? getFrozenLeftOffset(col, cIdx) : null"
+            [style.width.px]="getColumnWidth(col)"
+            [style.min-width.px]="getColumnWidth(col)"
+            [style.max-width.px]="getColumnWidth(col)">
+
+          <div class="cell-box"
+               [class.cell-active]="state.selectedCell()?.rowIdx === rowIndex && state.selectedCell()?.colKey === (col.key || col.name)"
+               [class.cell-editing]="isCellEditing(rowIndex, col.key || col.name)"
+               [class.cell-bad]="state.isAuditMode() && row.cells[col.key || col.name] && row.cells[col.key || col.name]?.isValid === false"
+               [class.cell-edited]="row.cells[col.key || col.name]?.isModified"
+               [class.cell-new]="row.isNew && isRowPopulated(row)"
+               [style.fontWeight]="isBold ? '700' : 'normal'"
+               [style.justifyContent]="textAlign === 'center' ? 'center' : (textAlign === 'right' ? 'flex-end' : 'flex-start')"
+               [style.textAlign]="textAlign"
+               [title]="row.cells[col.key || col.name]?.errorMessage || ''"
+               (click)="onCellClick(rowIndex, col.key || col.name, $event)"
+               (dblclick)="startCellEdit(rowIndex, col.key || col.name, row, $event)"
+               (contextmenu)="openCellContextMenu($event, rowIndex, col.key || col.name, row, col)">
+
+            <!-- In-Cell Edit Mode Input -->
+            <ng-container *ngIf="isCellEditing(rowIndex, col.key || col.name); else normalMode">
+              <input *ngIf="isDateColumn(col); else standardInput"
+                     #cellEditorInput
+                     type="date"
+                     class="raw-cell-editor date-editor"
+                     [(ngModel)]="editingValue"
+                     (input)="onEditorInput(editingValue, col, row)"
+                     (keydown)="onCellEditorKeydown($event, rowIndex, col.key || col.name, row)"
+                     (blur)="onCellEditorBlur(rowIndex, col.key || col.name, row)" />
+              <ng-template #standardInput>
+                <input #cellEditorInput
+                       [type]="isPasswordColumn(col) && !isCellUnmasked(rowIndex, col.key || col.name) ? 'password' : 'text'"
+                       class="raw-cell-editor"
+                       [(ngModel)]="editingValue"
+                       [style.fontWeight]="isBold ? '700' : 'normal'"
+                       [style.textAlign]="textAlign"
+                       (input)="onEditorInput(editingValue, col, row)"
+                       (keydown)="onCellEditorKeydown($event, rowIndex, col.key || col.name, row)"
+                       (blur)="onCellEditorBlur(rowIndex, col.key || col.name, row)" />
+              </ng-template>
+            </ng-container>
+
+            <!-- Normal Output Mode -->
+            <ng-template #normalMode>
+              <!-- 1. Special Boolean Column Rendering -->
+              <ng-container *ngIf="isBooleanColumn(col); else standardCellText">
+                <div class="bool-cell-container"
+                     (click)="toggleBooleanCell(rowIndex, col.key || col.name, row, $event)"
+                     [title]="isCellTrue(row.cells[col.key || col.name]?.value) ? 'Yes' : 'No'">
+
+                  <!-- Style A: Interactive Excel Checkbox -->
+                  <div *ngIf="booleanStyle === 'checkbox'"
+                       class="bool-checkbox-box"
+                       [class.checked]="isCellTrue(row.cells[col.key || col.name]?.value)">
+                    <i *ngIf="isCellTrue(row.cells[col.key || col.name]?.value)" class="pi pi-check"></i>
+                  </div>
+
+                  <!-- Style B: Micro Status Badge / Pill (Yes / No) -->
+                  <span *ngIf="booleanStyle === 'badge'"
+                        class="bool-badge-pill"
+                        [class.badge-true]="isCellTrue(row.cells[col.key || col.name]?.value)"
+                        [class.badge-false]="!isCellTrue(row.cells[col.key || col.name]?.value)">
+                    <i class="pi" [ngClass]="isCellTrue(row.cells[col.key || col.name]?.value) ? 'pi-check' : 'pi-times'"></i>
+                    <span class="bool-badge-text">{{ isCellTrue(row.cells[col.key || col.name]?.value) ? 'Yes' : 'No' }}</span>
+                  </span>
+
+                </div>
+              </ng-container>
+
+              <!-- 2. Standard Text Cell with Dynamic Formatting & Password Masking -->
+              <ng-template #standardCellText>
+                <span *ngIf="isPasswordColumn(col) && !isCellUnmasked(rowIndex, col.key || col.name)"
+                      class="cell-value-text text-truncate font-mono"
+                      style="letter-spacing: 2px; color: var(--text-muted, #64748b);"
+                      [title]="'Protected Password Data (Right-click cell or header to unmask)'">
+                  {{ (row.cells[col.key || col.name]?.value ? '••••••••' : '') }}
+                </span>
+                <span *ngIf="!isPasswordColumn(col) || isCellUnmasked(rowIndex, col.key || col.name)"
+                      class="cell-value-text text-truncate"
+                      [style.textAlign]="textAlign">{{ formatCellValue(col, row.cells[col.key || col.name]?.value) }}</span>
+              </ng-template>
+            </ng-template>
+
+          </div>
+        </td>
+      </tr>
+    </ng-template>
+
+    <!-- Empty State Message -->
+    <ng-template pTemplate="emptymessage">
+      <tr>
+        <td [attr.colspan]="headers.length + 1" class="text-center py-4 text-muted">
+          <i class="pi pi-file-excel me-2" style="font-size: 16px;"></i>
+          No data available. Open an Excel file or click 'Refresh' to load from database.
+        </td>
+      </tr>
+    </ng-template>
+
+  </p-table>
+
+  <!-- 5. Inline "Solve All" Batch Mistake Prompt Modal -->
+  <div *ngIf="promptState.visible" class="inline-solve-prompt card shadow-lg p-3">
+    <div class="d-flex align-items-center justify-content-between pb-2 mb-2 border-bottom">
+      <div class="d-flex align-items-center gap-2">
+        <i class="pi pi-bolt text-warning" style="font-size: 16px;"></i>
+        <strong class="fs-7">स्मार्ट बैच सुधार (Solve All Matches)</strong>
+      </div>
+      <button type="button" class="btn-close" (click)="dismissPrompt()"></button>
+    </div>
+
+    <div class="prompt-body text-start mb-3">
+      <p class="small text-muted mb-2">
+        आपने पंक्ति <strong>#{{ promptState.rowIdx + 1 }}</strong> में '<strong>{{ promptState.originalBadValue }}</strong>' को बदलकर
+        '<strong>{{ promptState.newSelectedDisplay }}</strong>' चुना है।
+      </p>
+      <div class="alert alert-warning py-2 px-3 small d-flex align-items-center gap-2 m-0">
+        <i class="pi pi-info-circle"></i>
+        <span>
+          कॉलम <strong>{{ promptState.colKey }}</strong> में <strong>{{ promptState.matchingCount }}</strong> अन्य पंक्तियों में भी यही अमान्य मान है।
+        </span>
+      </div>
+      <div class="form-check mt-2">
+        <input class="form-check-input" type="checkbox" id="chkDict" [(ngModel)]="promptState.saveToDictionary">
+        <label class="form-check-label small cursor-pointer" for="chkDict">
+          भविष्य के लिए डिक्शनरी में सहेजें (Save alias mapping to dictionary)
+        </label>
+      </div>
+    </div>
+
+    <div class="prompt-actions d-flex justify-content-end gap-2">
+      <button type="button" class="btn btn-sm btn-outline-secondary" (click)="applySingleCellOnly()">
+        केवल इसी पंक्ति में (Single Row Only)
+      </button>
+      <button type="button" class="btn btn-sm btn-success" (click)="confirmSolveAll()">
+        सभी {{ promptState.matchingCount + 1 }} सुधारें (Solve All)
+      </button>
+    </div>
+  </div>
+
+</div>
