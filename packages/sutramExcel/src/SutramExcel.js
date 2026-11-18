@@ -85,6 +85,14 @@ class SutramExcel {
         return this; // chainable
     }
 
+    unregister(tableName) {
+        if (tableName && this._configs[tableName]) {
+            delete this._configs[tableName];
+            console.log(`[sutramexcel] ✓ Unregistered: ${tableName}`);
+        }
+        return this;
+    }
+
     // ─────────────────────────────────────────────────────────
     // ROUTER — returns Express router
     // Mount: app.use('/_sutram/excel', excel.router())

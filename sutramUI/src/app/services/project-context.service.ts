@@ -121,7 +121,7 @@ export class ProjectContextService {
         }
       }),
       catchError(err => {
-        const msg = err?.error?.error || err?.message || 'अमान्य यूज़रनेम या पासवर्ड (Login failed)';
+        const msg = err?.error?.error || err?.message || 'Invalid username or password (Login failed)';
         return of({ success: false, error: msg });
       })
     );

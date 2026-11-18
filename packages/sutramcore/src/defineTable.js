@@ -55,7 +55,7 @@ function defineTable(tableName, columns = {}, joins = {}) {
     }
 
     // validate column types
-    const validTypes = ['number', 'string', 'boolean', 'json'];
+    const validTypes = ['number', 'string', 'boolean', 'json', 'date', 'datetime', 'password'];
     for (const [key, def] of Object.entries(resolvedColumns)) {
         if (!validTypes.includes(def.type)) {
             throw new Error(

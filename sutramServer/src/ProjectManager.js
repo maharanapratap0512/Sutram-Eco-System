@@ -190,14 +190,27 @@ class ProjectManager {
    */
   _syncExcelRegistrations(engine, excel, forceReload = false) {
     const schema = engine._schema || {};
+    const activeNames = new Set(
+      Object.keys(schema).filter(t => !t.startsWith('sys_') && !t.startsWith('sqlite_'))
+    );
+
+    // Prune dropped tables from Excel registry
+    if (typeof excel.getRegisteredTables === 'function' && typeof excel.unregister === 'function') {
+      for (const regName of excel.getRegisteredTables()) {
+        if (!activeNames.has(regName)) {
+          excel.unregister(regName);
+        }
+      }
+    }
+
     let count = 0;
-    for (const tableName of Object.keys(schema)) {
-      if (tableName.startsWith('sys_') || tableName.startsWith('sqlite_')) continue;
+    for (const tableName of activeNames) {
       if (forceReload || !excel.getConfig(tableName)) {
         try {
           const tbl = engine.table(tableName);
           if (tbl) {
-            excel.register(tbl);
+            const ui = (engine.ui && engine.ui.getTableSchema) ? engine.ui.getTableSchema(tableName) : null;
+            excel.register(tbl, ui?.display_name ? { display_name: ui.display_name } : {});
             count++;
           }
         } catch (err) {

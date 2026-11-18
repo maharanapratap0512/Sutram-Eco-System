@@ -568,7 +568,7 @@ function buildExcelRouter(sutramExcel) {
                 }
             }
             ok(res, { status: 'deleted', count: deletedCount, ids: targetIds });
-        } catch (e) { fail(res, e); }
+        } catch (e) { fail(res, e, e?.statusCode || 400); }
     });
 
     // ── DICTIONARY CRUD ───────────────────────────────────────

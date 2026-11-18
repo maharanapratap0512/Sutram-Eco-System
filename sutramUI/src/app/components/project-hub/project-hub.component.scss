@@ -724,6 +724,47 @@
   100% { transform: scale(0.9); opacity: 0.7; }
 }
 
+/* ── Compact Context Menu (matches Studio compact menus) ─────── */
+::ng-deep .sutram-compact-ctx-menu.p-contextmenu {
+  width: 178px !important;
+  min-width: 170px !important;
+  padding: 4px !important;
+  border-radius: 7px !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16) !important;
+
+  .p-menuitem {
+    margin: 1px 0 !important;
+  }
+
+  .p-menuitem-link {
+    padding: 6px 10px !important;
+    border-radius: 5px !important;
+    font-size: 12px !important;
+    gap: 8px !important;
+
+    .p-menuitem-icon {
+      font-size: 11px !important;
+      margin-right: 0 !important;
+    }
+
+    .p-menuitem-text {
+      font-size: 12px !important;
+      font-weight: 500 !important;
+    }
+  }
+
+  .p-menuitem.text-danger .p-menuitem-link {
+    .p-menuitem-text,
+    .p-menuitem-icon {
+      color: #ef4444 !important;
+    }
+  }
+
+  .p-menuitem-separator {
+    margin: 3px 4px !important;
+  }
+}
+
 /* ── Deep Dark Mode Overrides (Rules 1, 20, 21) ───────────────── */
 ::ng-deep body.dark-mode {
   .hub-user-pill {

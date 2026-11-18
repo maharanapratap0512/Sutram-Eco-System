@@ -48,8 +48,8 @@ export class ProjectUsersModalComponent implements OnInit, OnChanges {
   public formError: string = '';
 
   public roleOptions = [
-    { label: 'Author (ऑथर - डेटा प्रविष्टि एवं संपादन)', value: 'author' },
-    { label: 'Admin (एडमिन - पूर्ण नियंत्रण)', value: 'admin' }
+    { label: 'Author (Data entry & editing)', value: 'author' },
+    { label: 'Admin (Full control)', value: 'admin' }
   ];
 
   constructor(
@@ -184,7 +184,7 @@ export class ProjectUsersModalComponent implements OnInit, OnChanges {
       },
       error: (err) => {
         this.isSavingRights = false;
-        alert('अधिकार सहेजने में त्रुटि: ' + (err?.error?.error || err?.message));
+        alert('Error saving permissions: ' + (err?.error?.error || err?.message));
         this.cdr.markForCheck();
       }
     });
@@ -233,7 +233,7 @@ export class ProjectUsersModalComponent implements OnInit, OnChanges {
 
     if (this.rightViewMode === 'add_user') {
       if (!this.formUsername.trim() || !this.formPassword.trim()) {
-        this.formError = 'यूज़रनेम और पासवर्ड अनिवार्य हैं';
+        this.formError = 'Username and password are required';
         return;
       }
       this.isSavingUser = true;
@@ -299,10 +299,10 @@ export class ProjectUsersModalComponent implements OnInit, OnChanges {
   public deleteUser(u: InProjectUser, event: Event): void {
     event.stopPropagation();
     if (u.role === 'admin' && this.users.filter(x => x.role === 'admin').length <= 1) {
-      alert('एकमात्र एडमिन को हटाया नहीं जा सकता (Cannot delete sole administrator)');
+      alert('Cannot delete the sole administrator');
       return;
     }
-    if (!confirm(`क्या आप प्रोजेक्ट यूज़र "${u.username}" को हटाना चाहते हैं?`)) return;
+    if (!confirm(`Are you sure you want to delete project user "${u.username}"?`)) return;
 
     const query = this.getProjectQuery();
     this.http.delete(`/api/_sutram/schema/users/${u._id}${query}`).subscribe({
@@ -310,7 +310,7 @@ export class ProjectUsersModalComponent implements OnInit, OnChanges {
         this.loadProjectUsers();
       },
       error: (err) => {
-        alert('त्रुटि: ' + (err?.error?.error || err?.message));
+        alert('Error: ' + (err?.error?.error || err?.message));
       }
     });
   }

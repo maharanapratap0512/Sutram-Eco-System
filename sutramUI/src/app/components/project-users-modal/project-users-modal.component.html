@@ -6,7 +6,7 @@
   [resizable]="false"
   [style]="{ width: '84vw', height: '82vh', maxWidth: '1300px' }"
   styleClass="sutram-project-users-dialog"
-  [header]="'प्रोजेक्ट टीम एवं टेबल अधिकार (' + (project?.project_name || 'Project Users') + ')'"
+  [header]="'Project Team & Table Permissions (' + (project?.project_name || 'Project Users') + ')'"
   (onHide)="close()">
 
   <div class="project-users-container">
@@ -14,10 +14,10 @@
     <div class="project-scope-banner">
       <div class="banner-left">
         <i class="pi pi-database text-success"></i>
-        <span>प्रोजेक्ट: <strong>{{ project?.project_name }}</strong> (<code>{{ project?.project_slug }}.db</code>)</span>
+        <span>Project: <strong>{{ project?.project_name }}</strong> (<code>{{ project?.project_slug }}.db</code>)</span>
       </div>
       <div class="banner-right">
-        <span class="user-count-chip"><i class="pi pi-users me-1"></i> {{ users.length }} उपयोगकर्ता</span>
+        <span class="user-count-chip"><i class="pi pi-users me-1"></i> {{ users.length }} Users</span>
       </div>
     </div>
 
@@ -27,14 +27,14 @@
       <div class="panel-left">
         <div class="panel-header">
           <div class="d-flex align-items-center gap-2">
-            <span class="title">उपयोगकर्ता सूची</span>
+            <span class="title">Users</span>
             <button
               pButton
               type="button"
               class="p-button-sm p-button-text p-button-rounded refresh-btn"
               [icon]="isLoadingUsers ? 'pi pi-spin pi-spinner' : 'pi pi-refresh'"
               (click)="loadProjectUsers()"
-              title="रीफ़्रेश करें">
+              title="Refresh">
             </button>
           </div>
           <button
@@ -42,7 +42,7 @@
             type="button"
             class="p-button-sm p-button-primary p-button-outlined compact-add-btn"
             icon="pi pi-plus"
-            label="नया यूज़र"
+            label="New User"
             (click)="startAddUser()">
           </button>
         </div>
@@ -50,12 +50,12 @@
         <!-- User Cards / Rows Scroll Area (No Add Form Clutter) -->
         <div class="users-list-scroll">
           <div *ngIf="isLoadingUsers" class="loading-state">
-            <i class="pi pi-spin pi-spinner me-2"></i> लोड हो रहा है...
+            <i class="pi pi-spin pi-spinner me-2"></i> Loading...
           </div>
 
           <div *ngIf="!isLoadingUsers && users.length === 0" class="empty-state">
             <i class="pi pi-user-minus mb-2" style="font-size: 1.5rem; opacity: 0.5;"></i>
-            <span>कोई यूज़र नहीं मिला</span>
+            <span>No users found</span>
           </div>
 
           <div
@@ -85,7 +85,7 @@
                 class="p-button-sm p-button-rounded p-button-text p-button-secondary edit-btn"
                 icon="pi pi-pencil"
                 (click)="startEditUser(u, $event)"
-                title="विवरण व पासवर्ड संपादित करें">
+                title="Edit details & password">
               </button>
               <!-- Delete User Button (Trash Icon) -->
               <button
@@ -94,7 +94,7 @@
                 class="p-button-sm p-button-rounded p-button-text p-button-danger del-btn"
                 icon="pi pi-trash"
                 (click)="deleteUser(u, $event)"
-                title="हटाएं">
+                title="Delete">
               </button>
             </div>
           </div>
@@ -108,7 +108,7 @@
         <ng-container *ngIf="rightViewMode === 'permissions'">
           <div *ngIf="!selectedUser" class="no-selection-placeholder">
             <i class="pi pi-arrow-left mb-2" style="font-size: 1.8rem; opacity: 0.5;"></i>
-            <span>अधिकार देखने व सेट करने के लिए बाईं ओर से यूज़र चुनें</span>
+            <span>Select a user from the left to view and manage permissions</span>
           </div>
 
           <ng-container *ngIf="selectedUser">
@@ -125,7 +125,7 @@
                       {{ selectedUser.role | uppercase }}
                     </span>
                     <span class="ocr-status-tag" [class.ocr-enabled]="selectedUser.can_ocr !== 0 && selectedUser.can_ocr !== false">
-                      <i class="pi pi-camera"></i> {{ (selectedUser.can_ocr !== 0 && selectedUser.can_ocr !== false) ? 'OCR चालू' : 'OCR बंद' }}
+                      <i class="pi pi-camera"></i> {{ (selectedUser.can_ocr !== 0 && selectedUser.can_ocr !== false) ? 'OCR On' : 'OCR Off' }}
                     </span>
                   </div>
                   <span class="login-sub font-mono">@{{ selectedUser.username }}</span>
@@ -134,7 +134,7 @@
 
               <div class="header-action-buttons">
                 <span *ngIf="rightsSavedNotice" class="saved-badge-notice">
-                  <i class="pi pi-check me-1"></i> अधिकार सुरक्षित!
+                  <i class="pi pi-check me-1"></i> Permissions saved!
                 </span>
                 <!-- Button to switch to Edit Profile & Password Form -->
                 <button
@@ -142,9 +142,9 @@
                   type="button"
                   class="p-button-sm p-button-outlined p-button-secondary edit-profile-btn"
                   icon="pi pi-pencil"
-                  label="विवरण / पासवर्ड"
+                  label="Profile / Password"
                   (click)="startEditUser(selectedUser)"
-                  title="यूज़र प्रोफ़ाइल, रोल एवं पासवर्ड संपादित करें">
+                  title="Edit user profile, role, and password">
                 </button>
                 <!-- Button to Save Table Rights -->
                 <button
@@ -152,7 +152,7 @@
                   type="button"
                   class="p-button-sm p-button-success"
                   icon="pi pi-check"
-                  label="अधिकार सेव करें"
+                  label="Save Permissions"
                   [loading]="isSavingRights"
                   (click)="saveUserRights()">
                 </button>
@@ -168,15 +168,15 @@
                   pInputText
                   class="p-inputtext-sm table-search-input"
                   [(ngModel)]="tableSearchQuery"
-                  placeholder="तालिका खोजें (Filter tables)..." />
+                  placeholder="Filter tables..." />
               </div>
 
               <div class="bulk-toggles">
-                <span class="bulk-lbl">त्वरित टॉगल:</span>
-                <button pButton type="button" class="bulk-btn" label="सभी देखें" (click)="toggleAll('can_view')"></button>
-                <button pButton type="button" class="bulk-btn" label="सभी संपादन" (click)="toggleAll('can_edit')"></button>
-                <button pButton type="button" class="bulk-btn" label="सभी हटाएं" (click)="toggleAll('can_delete')"></button>
-                <button pButton type="button" class="bulk-btn" label="सभी अनमास्क" (click)="toggleAll('can_unmask')"></button>
+                <span class="bulk-lbl">Quick Toggle:</span>
+                <button pButton type="button" class="bulk-btn" label="All View" (click)="toggleAll('can_view')"></button>
+                <button pButton type="button" class="bulk-btn" label="All Edit" (click)="toggleAll('can_edit')"></button>
+                <button pButton type="button" class="bulk-btn" label="All Delete" (click)="toggleAll('can_delete')"></button>
+                <button pButton type="button" class="bulk-btn" label="All Unmask" (click)="toggleAll('can_unmask')"></button>
               </div>
             </div>
 
@@ -185,11 +185,11 @@
               <table class="rights-table">
                 <thead>
                   <tr>
-                    <th>तालिका नाम (Table)</th>
-                    <th class="th-check">देखें (View)</th>
-                    <th class="th-check">संपादित करें (Edit)</th>
-                    <th class="th-check">हटाएं (Delete)</th>
-                    <th class="th-check" title="Unmask password/secret columns">अनमास्क (Unmask 👁️)</th>
+                    <th>Table</th>
+                    <th class="th-check">View</th>
+                    <th class="th-check">Edit</th>
+                    <th class="th-check">Delete</th>
+                    <th class="th-check" title="Unmask password/secret columns">Unmask</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -223,7 +223,7 @@
             <div class="title-with-badge">
               <i class="pi" [ngClass]="rightViewMode === 'add_user' ? 'pi-user-plus text-primary' : 'pi-user-edit text-warning'"></i>
               <span class="title">
-                {{ rightViewMode === 'add_user' ? 'नया उपयोगकर्ता जोड़ें (Add New User)' : 'उपयोगकर्ता प्रोफ़ाइल एवं पासवर्ड संपादन: ' + (formDisplayName || formUsername) }}
+                {{ rightViewMode === 'add_user' ? 'Add New User' : 'Edit User Profile & Password: ' + (formDisplayName || formUsername) }}
               </span>
             </div>
             <button
@@ -231,7 +231,7 @@
               type="button"
               class="p-button-sm p-button-text p-button-secondary back-btn"
               icon="pi pi-arrow-left"
-              label="टेबल अधिकार मैट्रिक्स पर वापस जाएं"
+              label="Back to Permissions Matrix"
               (click)="closeUserForm()">
             </button>
           </div>
@@ -244,7 +244,7 @@
             <div class="form-grid">
               <!-- Field 1: Username -->
               <div class="form-field">
-                <label>यूज़रनेम (Username) <span *ngIf="rightViewMode === 'add_user'">*</span></label>
+                <label>Username <span *ngIf="rightViewMode === 'add_user'">*</span></label>
                 <div class="input-wrap font-mono">
                   <input
                     type="text"
@@ -254,12 +254,12 @@
                     [disabled]="rightViewMode === 'edit_user'"
                     placeholder="e.g. store_manager" />
                 </div>
-                <span *ngIf="rightViewMode === 'edit_user'" class="field-hint">यूज़रनेम स्थायी पहचानकर्ता है</span>
+                <span *ngIf="rightViewMode === 'edit_user'" class="field-hint">Username cannot be changed</span>
               </div>
 
               <!-- Field 2: Display Name -->
               <div class="form-field">
-                <label>प्रदर्शन नाम (Display Name)</label>
+                <label>Display Name</label>
                 <input
                   type="text"
                   pInputText
@@ -270,7 +270,7 @@
 
               <!-- Field 3: Role Dropdown (Proper Compact Size) -->
               <div class="form-field">
-                <label>रोल (Role)</label>
+                <label>Role</label>
                 <p-dropdown
                   [options]="roleOptions"
                   [(ngModel)]="formRole"
@@ -282,23 +282,23 @@
 
               <!-- Field 4: Password -->
               <div class="form-field">
-                <label>{{ rightViewMode === 'add_user' ? 'पासवर्ड (Password) *' : 'पासवर्ड रीसेट (Password Reset)' }}</label>
+                <label>{{ rightViewMode === 'add_user' ? 'Password *' : 'Password Reset' }}</label>
                 <input
                   type="password"
                   pInputText
                   class="p-inputtext-sm w-full font-mono"
                   [(ngModel)]="formPassword"
-                  [placeholder]="rightViewMode === 'add_user' ? 'कम से कम 4 अक्षर' : 'खाली छोड़ें यदि वही रखना हो'" />
+                  [placeholder]="rightViewMode === 'add_user' ? 'Minimum 4 characters' : 'Leave blank to keep unchanged'" />
               </div>
 
               <!-- Field 5: Feature Rights (Span 2) -->
               <div class="form-field span-2 feature-rights-box">
-                <label>फ़ीचर अधिकार (Feature Permissions)</label>
+                <label>Feature Permissions</label>
                 <div class="feature-checkbox-inline mt-1">
                   <p-checkbox [(ngModel)]="formCanOcr" [binary]="true" inputId="formCanOcr"></p-checkbox>
                   <label for="formCanOcr" class="checkbox-lbl cursor-pointer">
                     <i class="pi pi-camera me-1" style="color: #ec4899;"></i>
-                    <strong>AI Vision OCR स्कैनर</strong> — हस्तलिखित पर्चियों, बिलों व रजिस्टरों को सीधे एक्सेल शीट में स्कैन करने की अनुमति
+                    <strong>AI Vision OCR Scanner</strong> — Allow scanning handwritten slips, bills, and registers directly into sheets
                   </label>
                 </div>
               </div>
@@ -309,7 +309,7 @@
               <button
                 pButton
                 type="button"
-                label="रद्द करें"
+                label="Cancel"
                 class="p-button-sm p-button-text p-button-secondary me-2"
                 (click)="closeUserForm()">
               </button>
@@ -318,7 +318,7 @@
                 type="button"
                 class="p-button-sm p-button-success px-4"
                 icon="pi pi-check"
-                [label]="rightViewMode === 'add_user' ? 'यूज़र बनाएं' : 'विवरण सुरक्षित करें'"
+                [label]="rightViewMode === 'add_user' ? 'Create User' : 'Save Changes'"
                 [loading]="isSavingUser"
                 (click)="submitUserForm()">
               </button>
@@ -331,6 +331,6 @@
   </div>
 
   <ng-template pTemplate="footer">
-    <button pButton type="button" label="बंद करें" class="p-button-sm p-button-text" (click)="close()"></button>
+    <button pButton type="button" label="Close" class="p-button-sm p-button-text" (click)="close()"></button>
   </ng-template>
 </p-dialog>

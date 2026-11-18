@@ -14,8 +14,10 @@
         <i class="pi pi-table"></i>
       </div>
       <div class="header-titles">
-        <span class="header-main-title">Create New Table</span>
-        <span class="header-sub-title">Define schema columns, data types, constraints, and relationships</span>
+        <span class="header-main-title">{{ isEditMode ? ('Edit Table: ' + editTableName) : 'Create New Table' }}</span>
+        <span class="header-sub-title">
+          {{ isEditMode ? ('Modify columns, data types, constraints, and relationships (' + existingRowCount + ' existing rows preserved)') : 'Define schema columns, data types, constraints, and relationships' }}
+        </span>
       </div>
     </div>
   </ng-template>
@@ -31,6 +33,7 @@
             pInputText
             class="p-inputtext-sm font-mono meta-input"
             [(ngModel)]="newTableName"
+            [disabled]="isEditMode"
             (ngModelChange)="updateLiveSql()"
             placeholder="e.g. sales_orders, products" />
         </div>
@@ -383,7 +386,7 @@
       <button
         pButton
         type="button"
-        label="Create Table"
+        [label]="isEditMode ? 'Save Changes' : 'Create Table'"
         icon="pi pi-check"
         class="btn-footer p-button-primary p-button-sm"
         [loading]="isCreatingTable"

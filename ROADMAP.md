@@ -100,7 +100,8 @@
 ## 🌐 Phase 4: Multi-User LAN Collaboration & Mobile Companion
 *Goal: Expand seamlessly once Single-User Perfection is complete.*
 
-### 4.1 In-App Remote LAN Project Tabs
+### 4.1 In-App Remote LAN Project Tabs & Share Status Sync
+- Fix LAN Share card status sync (`SutramLan.getNodeInfo()` returning `sharedProjects` vs frontend `LanNetworkService` checking `localNode.projects`, plus `LanScanner.getPeers()` field normalization) so right-clicking a project card and clicking **Share on LAN** immediately updates the card badge from `Private` to `Live on LAN`.
 - Open discovered LAN peer projects **directly inside your Tauri app's top tab bar** (marked with a `🌐 Remote: <PC-Name>` badge), transparently routing that tab's requests via `ProjectHttpInterceptor` to `http://<peer_ip>:3300` with `x-lan-token`.
 
 ### 4.2 Real-Time Live Multi-User Sync (WebSockets over `sutramLan`)

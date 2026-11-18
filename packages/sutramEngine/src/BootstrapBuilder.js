@@ -35,15 +35,24 @@ class BootstrapBuilder {
         const columns = this._loadColumns();
         const joins   = this._loadJoins();
 
+        // Build set of physically existing active tables so dangling FKs never crash the app
+        const physicalTables = new Set(
+            this.db.prepare(`SELECT name FROM sqlite_master WHERE type IN ('table', 'view')`).all().map(r => r.name)
+        );
+        const activeTables = new Set(
+            tables.map(t => t.table_name).filter(name => physicalTables.has(name))
+        );
+
         const meta = {};
 
         for (const table of tables) {
+            if (!physicalTables.has(table.table_name)) continue;
             const tableCols = columns.filter(c => c.table_id === table._id);
             const tableJoins = joins.filter(j => j.table_id === table._id);
 
             meta[table.table_name] = {
-                columns: this._buildColumns(tableCols),
-                joins:   this._buildJoins(tableJoins),
+                columns: this._buildColumns(tableCols, activeTables, table.table_name),
+                joins:   this._buildJoins(tableJoins, activeTables),
             };
         }
 
@@ -78,7 +87,7 @@ class BootstrapBuilder {
 
     // ── Build column definitions ──────────────────────────────
 
-    _buildColumns(cols) {
+    _buildColumns(cols, activeTables = null, ownerTable = '') {
         const result = {};
 
         for (const col of cols) {
@@ -97,19 +106,23 @@ class BootstrapBuilder {
                 def.pk = true;
             }
 
-            // hasOne join — ref declared on this column
+            // hasOne join — ref declared on this column (guard against dangling missing target table)
             if (col.ref_table && col.ref_col) {
-                def.ref    = `${col.ref_table}.${col.ref_col}`;
-                def.as     = col.ref_as ?? col.ref_table;
-                let parsedSelect = '*';
-                if (col.ref_select) {
-                    try {
-                        parsedSelect = JSON.parse(col.ref_select);
-                    } catch {
-                        parsedSelect = col.ref_select.includes(',') ? col.ref_select.split(',').map(s => s.trim()) : col.ref_select;
+                if (activeTables && !activeTables.has(col.ref_table)) {
+                    console.warn(`[sutramEngine] Ignoring dangling FK ${ownerTable}.${col.column_name} -> missing table "${col.ref_table}"`);
+                } else {
+                    def.ref    = `${col.ref_table}.${col.ref_col}`;
+                    def.as     = col.ref_as ?? col.ref_table;
+                    let parsedSelect = '*';
+                    if (col.ref_select) {
+                        try {
+                            parsedSelect = JSON.parse(col.ref_select);
+                        } catch {
+                            parsedSelect = col.ref_select.includes(',') ? col.ref_select.split(',').map(s => s.trim()) : col.ref_select;
+                        }
                     }
+                    def.select = parsedSelect;
                 }
-                def.select = parsedSelect;
             }
 
             result[col.column_name] = def;
@@ -120,10 +133,12 @@ class BootstrapBuilder {
 
     // ── Build join definitions ────────────────────────────────
 
-    _buildJoins(joins) {
+    _buildJoins(joins, activeTables = null) {
         const result = {};
 
         for (const join of joins) {
+            if (activeTables && join.child_table && !activeTables.has(join.child_table)) continue;
+            if (activeTables && join.junction_table && !activeTables.has(join.junction_table)) continue;
             const selectCols = join.select_cols
                 ? JSON.parse(join.select_cols)
                 : '*';

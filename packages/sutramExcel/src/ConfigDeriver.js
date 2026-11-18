@@ -49,6 +49,11 @@ class ConfigDeriver {
             headers.push(merged);
         }
 
+        const autoDateCols = headers
+            .filter(h => h.type === 'date' || h.type === 'datetime')
+            .map(h => h.col_name);
+        const mergedDateCols = [...new Set([...(extend.dateColumns ?? []), ...autoDateCols])];
+
         return {
             table:          tableName,
             display_name:   extend.display_name ?? tableName,
@@ -59,7 +64,7 @@ class ConfigDeriver {
             autoIncrement:  extend.autoIncrement   ?? [],
             jsonColumns:    extend.jsonColumns      ?? [],
             booleanColumns: extend.booleanColumns   ?? [],
-            dateColumns:    extend.dateColumns      ?? [],
+            dateColumns:    mergedDateCols,
             autoSet:        extend.autoSet          ?? {},
         };
     }
@@ -109,10 +114,13 @@ class ConfigDeriver {
     // ─────────────────────────────────────────────────────────
 
     _mapType(def) {
-        const t = def.type ?? '';
-        if (t === 'boolean') return 'boolean';
-        if (t === 'json')    return 'json';
-        if (t === 'number')  return 'number';
+        const t = String(def.type ?? '').toLowerCase();
+        if (t === 'boolean')  return 'boolean';
+        if (t === 'json')     return 'json';
+        if (t === 'number')   return 'number';
+        if (t === 'date')     return 'date';
+        if (t === 'datetime') return 'datetime';
+        if (t === 'password') return 'password';
         return 'string';
     }
 

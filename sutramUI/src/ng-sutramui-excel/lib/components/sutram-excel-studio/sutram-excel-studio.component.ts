@@ -160,20 +160,190 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
 
   // ── Table Designer Modal State ──────────────────────────────
   public showTableDesignerModal: boolean = false;
+  public editTableName: string | null = null;
+  public tableActionMenu: {
+    visible: boolean;
+    x: number;
+    y: number;
+    table: string;
+    displayName: string;
+  } = { visible: false, x: 0, y: 0, table: '', displayName: '' };
 
   public openCreateTable(): void {
     if (!this.isAdmin) {
-      alert('नई तालिका केवल एडमिन द्वारा बनाई जा सकती है (Creating tables is admin only).');
+      alert('Creating tables is admin only.');
       return;
     }
+    this.editTableName = null;
     this.showTableDesignerModal = true;
     this.cdr.markForCheck();
   }
 
+  public openEditTable(tableName: string): void {
+    this.closeTableActionMenu();
+    if (!this.isAdmin) {
+      alert('Editing tables is admin only.');
+      return;
+    }
+    this.editTableName = tableName;
+    this.showTableDesignerModal = true;
+    this.cdr.markForCheck();
+  }
+
+  public openTableActionMenu(event: MouseEvent, tbl: { table: string; display_name: string }): void {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (this.tableActionMenu.visible && this.tableActionMenu.table === tbl.table) {
+      this.closeTableActionMenu();
+      return;
+    }
+
+    const menuWidth = 170;
+    const menuHeight = this.isAdmin ? 120 : 48;
+    const target = event.currentTarget as HTMLElement;
+    const rect = target?.getBoundingClientRect?.();
+
+    let x = event.type === 'contextmenu' ? event.clientX : (rect ? rect.right - menuWidth : event.clientX);
+    let y = event.type === 'contextmenu' ? event.clientY : (rect ? rect.bottom + 4 : event.clientY);
+
+    x = Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8));
+    y = y + menuHeight > window.innerHeight ? Math.max(8, y - menuHeight - 8) : y;
+
+    this.tableActionMenu = {
+      visible: true,
+      x,
+      y,
+      table: tbl.table,
+      displayName: tbl.display_name || tbl.table
+    };
+    this.cdr.markForCheck();
+  }
+
+  public closeTableActionMenu(): void {
+    if (this.tableActionMenu.visible) {
+      this.tableActionMenu.visible = false;
+      this.tableActionMenu.table = '';
+      this.cdr.markForCheck();
+    }
+  }
+
   public onTableCreated(tableName: string): void {
+    this.editTableName = null;
     this.refreshStudioTables(tableName);
     this.tableCreated.emit(tableName);
     this.cdr.markForCheck();
+  }
+
+  public onTableUpdated(tableName: string): void {
+    this.editTableName = null;
+    // Clear cached workbook & header caches so updated schema, new columns, and default values render immediately
+    const existingTab = this.sheetTabs.find(t => t.id === tableName || t.tableName === tableName);
+    if (existingTab && this.sheetWorkbooks[existingTab.id]) {
+      delete this.sheetWorkbooks[existingTab.id];
+    }
+    if (this.sheetWorkbooks[tableName]) {
+      delete this.sheetWorkbooks[tableName];
+    }
+
+    // Refresh FK reference cache for this table in case another sheet references it
+    try {
+      this.refCache.preloadTables([tableName]);
+    } catch {}
+
+    const isCurrentlyActive = this.activeSheetId === tableName || this.selectedTableName === tableName;
+
+    this.api.getRegisteredTables().subscribe({
+      next: (tables: any[]) => {
+        this.tablesList = (tables || []).filter(t => !t.table.startsWith('sys_') && !t.table.startsWith('sqlite_'));
+        const updatedInfo = this.tablesList.find(t => t.table === tableName);
+        if (existingTab && updatedInfo?.display_name) {
+          existingTab.title = updatedInfo.display_name;
+        }
+
+        if (isCurrentlyActive) {
+          // Force full, immediate Excel grid recreation from fresh backend schema + rows
+          this._cachedVisibleHeaders = [];
+          this._lastAllColsRef = null;
+          this.allConfigColumns = [];
+          this.state.setRows([]);
+          this.onTableSelect(tableName, true);
+        } else if (existingTab) {
+          this.openTableInSheet(tableName);
+        }
+        this.cdr.markForCheck();
+      },
+      error: (err: any) => {
+        console.error('[SutramStudio] Refresh after table update failed:', err);
+        if (isCurrentlyActive) {
+          this._cachedVisibleHeaders = [];
+          this._lastAllColsRef = null;
+          this.allConfigColumns = [];
+          this.state.setRows([]);
+          this.onTableSelect(tableName, true);
+        }
+        this.cdr.markForCheck();
+      }
+    });
+  }
+
+  public confirmDeleteTable(tableName: string, displayName?: string): void {
+    this.closeTableActionMenu();
+    if (!this.isAdmin) {
+      alert('Deleting tables is admin only.');
+      return;
+    }
+
+    this.api.getTableDetail(tableName).subscribe({
+      next: (res) => {
+        const d = res?.result || {};
+        const rows = d.rowCount || 0;
+        const refs: Array<{ table_name: string; column_name: string }> = d.referencingTables || [];
+
+        // STRICT DDL FK RESTRICTION: Block deletion if any other table references this table
+        if (refs.length > 0) {
+          const refList = refs.map(r => `• ${r.table_name} (column: ${r.column_name})`).join('\n');
+          alert(
+            `Cannot delete table "${displayName || tableName}" (${tableName}).\n\n` +
+            `This table is referenced by the following table(s):\n${refList}\n\n` +
+            `Delete the referencing table(s) or remove their foreign key columns first.`
+          );
+          return;
+        }
+
+        const warn = `Are you sure you want to permanently delete table "${displayName || tableName}" (${tableName})?\n\n• Existing rows to be lost: ${rows}\n\nThis action cannot be undone.`;
+
+        if (!window.confirm(warn)) return;
+
+        this.api.deleteTable(tableName).subscribe({
+          next: (delRes) => {
+            if (delRes && delRes.success) {
+              // Remove from favorites if starred
+              if (this.favoriteTables.has(tableName)) {
+                this.favoriteTables.delete(tableName);
+                localStorage.setItem('sutram_studio_favorites', JSON.stringify(Array.from(this.favoriteTables)));
+              }
+              // Close open tab if open
+              const openTab = this.sheetTabs.find(t => t.id === tableName || t.tableName === tableName);
+              if (openTab) {
+                this.deleteSheet(openTab);
+              }
+              this.refreshStudioTables();
+            } else {
+              alert('Error deleting table: ' + (delRes?.error || 'Unknown error'));
+            }
+            this.cdr.markForCheck();
+          },
+          error: (err) => {
+            alert('Error deleting table: ' + (err?.error?.error || err?.message || 'Server error'));
+            this.cdr.markForCheck();
+          }
+        });
+      },
+      error: (err) => {
+        alert('Error inspecting table: ' + (err?.error?.error || err?.message || 'Server error'));
+      }
+    });
   }
 
   // ── Declarative Feature Flags (Batteries-Included: All ON by default, toggleable by user flags) ──
@@ -886,10 +1056,29 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
         .filter(Boolean);
     }
 
-    // 1. Restore exact visibility selection
+    // Track which column keys existed when savedConfig was stored vs live schema columns
+    const liveKeys = new Set<string>(this.allConfigColumns.map(c => c.key));
+    const savedKnownKeys = new Set<string>();
+    savedCols.forEach((sc: any) => {
+      const k = sc.key || sc.col_name || sc.name || sc.column_name;
+      if (k) savedKnownKeys.add(k);
+    });
+    if (Array.isArray(selectedKeys)) {
+      selectedKeys.forEach(k => savedKnownKeys.add(k));
+    }
+
+    // 1. Restore exact visibility selection for existing columns + auto-show brand-new schema columns
+    let hasNewSchemaCols = false;
     if (Array.isArray(selectedKeys) && selectedKeys.length > 0) {
-      this.selectedColumnKeys = new Set(selectedKeys);
-      selectedKeys.forEach(k => this.ensureRowCellsForColumn(k));
+      const nextSelected = new Set<string>(selectedKeys.filter(k => liveKeys.has(k)));
+      this.allConfigColumns.forEach(c => {
+        if (!c.is_fk_subcol && !savedKnownKeys.has(c.key)) {
+          nextSelected.add(c.key);
+          hasNewSchemaCols = true;
+        }
+      });
+      this.selectedColumnKeys = nextSelected;
+      this.selectedColumnKeys.forEach(k => this.ensureRowCellsForColumn(k));
     }
 
     // 2. Restore custom label and display_format by exact key
@@ -936,6 +1125,13 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
     }
     if (this.frozenColKeys.length > 0) {
       this.reorderColumnsForFreeze();
+    }
+
+    // Invalidate visible headers cache and persist if brand-new schema columns were auto-enabled
+    this._cachedVisibleHeaders = [];
+    this._lastAllColsRef = null;
+    if (hasNewSchemaCols) {
+      setTimeout(() => this.autoSaveColumnConfig(), 50);
     }
 
     this.cdr.markForCheck();
@@ -2465,6 +2661,17 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
     if (anyChanged) {
       this.cdr.markForCheck();
     }
+  }
+
+  public get permittedTablesCount(): number {
+    let list = (this.tablesList || []).filter(t => !t.table.startsWith('sys_') && !t.table.startsWith('sqlite_'));
+    if (!this.isAdmin) {
+      list = list.filter(t => {
+        const rights = this.currentUserRightsMap.get(t.table);
+        return !rights || rights.can_view;
+      });
+    }
+    return list.length;
   }
 
   public get filteredTables(): Array<{ table: string; display_name: string }> {
@@ -4405,9 +4612,15 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
           this.state.totalDbRecords.update((n: number) => Math.max(0, n - delCount));
           this.state.clearDeletedRowIds();
         } catch (delErr: any) {
+          const errMsg = delErr?.error?.error || delErr?.error?.message || delErr?.message || 'Delete failed';
           progress.rejected += deletedIds.length;
-          this.syncToast = { ...this.syncToast, failed: this.syncToast.failed + deletedIds.length };
-          this.rejectedRowsDuringImport.push({ _id: deletedIds.join(', '), _error: delErr?.message || 'Delete failed' });
+          this.syncToast = {
+            ...this.syncToast,
+            failed: this.syncToast.failed + deletedIds.length,
+            errors: [...(this.syncToast.errors || []), errMsg]
+          };
+          this.rejectedRowsDuringImport.push({ _id: deletedIds.join(', '), _error: errMsg });
+          alert(errMsg);
           // Deletion failed: restore deleted rows back to normal in grid and clear delete queue
           const queue = this.state.deletedRowsQueue();
           if (queue.length > 0) {
@@ -4615,6 +4828,9 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
     if (this.tabContextMenu.visible) {
       this.closeTabContextMenu();
     }
+    if (this.tableActionMenu.visible) {
+      this.closeTableActionMenu();
+    }
   }
 
   @HostListener('document:keydown', ['$event'])
@@ -4626,6 +4842,10 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
       }
       if (this.tabContextMenu.visible) {
         this.closeTabContextMenu();
+        return;
+      }
+      if (this.tableActionMenu.visible) {
+        this.closeTableActionMenu();
         return;
       }
     }

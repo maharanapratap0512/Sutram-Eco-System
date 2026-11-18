@@ -681,6 +681,32 @@ export class SutramGridComponent implements OnChanges, AfterViewInit, OnDestroy 
     this.cdr.markForCheck();
   }
 
+  public openDatePickerFromSelectedCell(
+    rowIdx: number,
+    colKey: string,
+    row: SutramRow,
+    event: MouseEvent
+  ): void {
+    event.stopPropagation();
+    event.preventDefault();
+    this.startCellEdit(rowIdx, colKey, row, event);
+    setTimeout(() => {
+      const inputEl = this.el.nativeElement.querySelector('.raw-cell-editor.date-editor') as HTMLInputElement | null;
+      if (inputEl) {
+        inputEl.focus();
+        try {
+          if (typeof (inputEl as any).showPicker === 'function') {
+            (inputEl as any).showPicker();
+          } else {
+            inputEl.click();
+          }
+        } catch {
+          try { inputEl.click(); } catch {}
+        }
+      }
+    }, 25);
+  }
+
   public onEditorInput(val: string, col: SutramHeaderConfig, row: SutramRow): void {
     this.editingValue = val;
     if (this.isDropdownColumn(col)) {

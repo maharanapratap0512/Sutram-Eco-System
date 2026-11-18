@@ -72,7 +72,7 @@ export class ProjectHubComponent implements OnInit, OnDestroy {
 
   public onCreateProjectClick(mode: 'blank' | 'upload' = 'blank'): void {
     if (!this.canCreateProject) {
-      alert('अनुमति अस्वीकृत: आपके पास नया प्रोजेक्ट बनाने का अधिकार नहीं है। कृपया व्यवस्थापक (Superadmin) से अनुमति लें।');
+      alert('Permission Denied: Only administrators can create new projects.');
       return;
     }
     this.initialModalMode = mode;
@@ -161,7 +161,7 @@ export class ProjectHubComponent implements OnInit, OnDestroy {
 
   public deleteProject(p: ProjectItem, event?: Event): void {
     if (event) event.stopPropagation();
-    if (!confirm(`क्या आप प्रोजेक्ट "${p.project_name}" (${p.project_slug}) को आर्काइव करना चाहते हैं?`)) {
+    if (!confirm(`Archive project "${p.project_name}" (${p.project_slug})?`)) {
       return;
     }
     this.projectContext.deleteProject(p.project_slug).subscribe({
@@ -171,7 +171,7 @@ export class ProjectHubComponent implements OnInit, OnDestroy {
         }
       },
       error: (err) => {
-        alert('त्रुटि: ' + (err?.error?.error || err?.message || 'Failed to archive project'));
+        alert('Error: ' + (err?.error?.error || err?.message || 'Failed to archive project'));
       }
     });
   }
@@ -211,7 +211,7 @@ export class ProjectHubComponent implements OnInit, OnDestroy {
 
     this.projectMenuItems = [
       {
-        label: isLive ? '🔒 Stop Sharing (Private करें)' : '📡 Share on LAN (Live करें)',
+        label: isLive ? 'Stop Sharing (Private)' : 'Share on LAN',
         icon: isLive ? 'pi pi-lock' : 'pi pi-globe',
         command: () => this.toggleProjectShare(p)
       },
@@ -219,12 +219,12 @@ export class ProjectHubComponent implements OnInit, OnDestroy {
         separator: true
       },
       {
-        label: '📂 Open Project (खोलें)',
+        label: 'Open Project',
         icon: 'pi pi-folder-open',
         command: () => this.launchProject(p)
       },
       {
-        label: `📋 Copy DB Name (${p.project_slug}.db)`,
+        label: 'Copy DB Name',
         icon: 'pi pi-copy',
         command: () => this.copyProjectSlug(p)
       },
@@ -232,7 +232,7 @@ export class ProjectHubComponent implements OnInit, OnDestroy {
         separator: true
       },
       {
-        label: '🗑 Archive Project',
+        label: 'Archive Project',
         icon: 'pi pi-trash',
         styleClass: 'text-danger',
         command: () => this.deleteProject(p)
@@ -267,11 +267,11 @@ export class ProjectHubComponent implements OnInit, OnDestroy {
     if (!this.sharingProject) return;
 
     if (this.quickAuthType === 'pin' && (!this.quickPin || this.quickPin.trim().length < 4)) {
-      this.shareError = 'कृपया कम से कम 4 अंकों का पिन दर्ज करें';
+      this.shareError = 'Please enter at least a 4-digit PIN';
       return;
     }
     if (this.quickAuthType === 'password' && (!this.quickPassword || this.quickPassword.trim().length < 4)) {
-      this.shareError = 'कृपया कम से कम 4 अक्षरों का पासवर्ड दर्ज करें';
+      this.shareError = 'Please enter at least a 4-character password';
       return;
     }
 
@@ -380,7 +380,7 @@ export class ProjectHubComponent implements OnInit, OnDestroy {
     if (!this.selectedRemotePeer || !this.selectedRemoteProject || !this.authChallenge) return;
 
     if (!this.authSecretInput || this.authSecretInput.trim().length === 0) {
-      this.authError = 'कृपया पिन या पासवर्ड दर्ज करें';
+      this.authError = 'Please enter PIN or password';
       return;
     }
 
@@ -398,13 +398,13 @@ export class ProjectHubComponent implements OnInit, OnDestroy {
             '_blank'
           );
         } else {
-          this.authError = res.error || 'अमान्य पिन/पासवर्ड (Authentication Failed)';
+          this.authError = res.error || 'Invalid PIN or password';
         }
         this.cdr.markForCheck();
       },
       error: (err) => {
         this.isAuthenticating = false;
-        this.authError = err?.error?.error || 'सत्यापन विफल (Authentication Failed)';
+        this.authError = err?.error?.error || 'Authentication failed';
         this.cdr.markForCheck();
       }
     });

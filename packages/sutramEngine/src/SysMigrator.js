@@ -48,31 +48,36 @@ class SysMigrator {
         const pending = sysMigrations.slice(currentVersion);
         let version   = currentVersion;
 
-        for (const sqlList of pending) {
-            version++;
+        this.db.pragma('foreign_keys = OFF');
+        try {
+            for (const sqlList of pending) {
+                version++;
 
-            if (!Array.isArray(sqlList)) {
-                throw new Error(
-                    `[sutramEngine] Migration v${version} must be an array of SQL strings.`
-                );
-            }
-
-            const runVersion = this.db.transaction(() => {
-                for (const sql of sqlList) {
-                    this.db.prepare(sql).run();
+                if (!Array.isArray(sqlList)) {
+                    throw new Error(
+                        `[sutramEngine] Migration v${version} must be an array of SQL strings.`
+                    );
                 }
-                // update engine_version INSIDE transaction — atomic
-                this.db.prepare(
-                    `UPDATE sys_meta SET value = ? WHERE key = 'engine_version'`
-                ).run(String(version));
-            });
 
-            try {
-                runVersion();
-                console.log(`[sutramEngine] ✓ sys migration v${version} applied`);
-            } catch (err) {
-                throw new Error(`[sutramEngine] ✗ sys migration v${version} failed: ${err.message}`);
+                const runVersion = this.db.transaction(() => {
+                    for (const sql of sqlList) {
+                        this.db.prepare(sql).run();
+                    }
+                    // update engine_version INSIDE transaction — atomic
+                    this.db.prepare(
+                        `UPDATE sys_meta SET value = ? WHERE key = 'engine_version'`
+                    ).run(String(version));
+                });
+
+                try {
+                    runVersion();
+                    console.log(`[sutramEngine] ✓ sys migration v${version} applied`);
+                } catch (err) {
+                    throw new Error(`[sutramEngine] ✗ sys migration v${version} failed: ${err.message}`);
+                }
             }
+        } finally {
+            this.db.pragma('foreign_keys = ON');
         }
     }
 }

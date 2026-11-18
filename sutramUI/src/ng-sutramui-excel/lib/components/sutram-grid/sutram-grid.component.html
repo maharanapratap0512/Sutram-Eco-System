@@ -539,6 +539,7 @@
           <div class="cell-box"
                [class.cell-active]="state.selectedCell()?.rowIdx === rowIndex && state.selectedCell()?.colKey === (col.key || col.name)"
                [class.cell-editing]="isCellEditing(rowIndex, col.key || col.name)"
+               [class.has-date-picker-icon]="!isCellEditing(rowIndex, col.key || col.name) && isDateColumn(col) && !col.readonly && !col.is_fk_subcol && !col.is_temp && !col.is_virtual && state.selectedCell()?.rowIdx === rowIndex && state.selectedCell()?.colKey === (col.key || col.name)"
                [class.cell-bad]="state.isAuditMode() && row.cells[col.key || col.name] && row.cells[col.key || col.name]?.isValid === false"
                [class.cell-edited]="row.cells[col.key || col.name]?.isModified"
                [class.cell-new]="row.isNew && isRowPopulated(row)"
@@ -611,6 +612,14 @@
                 <span *ngIf="!isPasswordColumn(col) || isCellUnmasked(rowIndex, col.key || col.name)"
                       class="cell-value-text text-truncate"
                       [style.textAlign]="textAlign">{{ formatCellValue(col, row.cells[col.key || col.name]?.value) }}</span>
+                <button *ngIf="isDateColumn(col) && !col.readonly && !col.is_fk_subcol && !col.is_temp && !col.is_virtual && state.selectedCell()?.rowIdx === rowIndex && state.selectedCell()?.colKey === (col.key || col.name)"
+                        type="button"
+                        class="cell-date-picker-trigger"
+                        title="Pick Date"
+                        (mousedown)="$event.stopPropagation()"
+                        (click)="openDatePickerFromSelectedCell(rowIndex, col.key || col.name, row, $event)">
+                  <i class="pi pi-calendar"></i>
+                </button>
               </ng-template>
             </ng-template>
 

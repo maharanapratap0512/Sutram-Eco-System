@@ -18,7 +18,7 @@
         <div class="brand-icon-box">
           <i class="pi pi-th-large"></i>
         </div>
-        <h1 class="brand-title">सूत्रम् <span>(Sutram) Studio</span></h1>
+        <h1 class="brand-title">Sutram <span>Studio</span></h1>
         <p class="brand-tagline">
           Universal Dynamic Spreadsheet & Database ERP
         </p>
@@ -34,7 +34,7 @@
       <!-- Login Form -->
       <form (ngSubmit)="onLogin()" class="login-form">
         <div class="form-field">
-          <label class="field-label">यूज़रनेम (Master Username)</label>
+          <label class="field-label">Master Username</label>
           <div class="input-wrapper">
             <i class="pi pi-user input-icon"></i>
             <input type="text" pInputText class="w-full" [(ngModel)]="username" name="username" autocomplete="username"
@@ -43,7 +43,7 @@
         </div>
 
         <div class="form-field">
-          <label class="field-label">पासवर्ड (Password)</label>
+          <label class="field-label">Password</label>
           <div class="input-wrapper">
             <i class="pi pi-lock input-icon"></i>
             <p-password [(ngModel)]="password" name="password" [feedback]="false" [toggleMask]="true"
@@ -54,7 +54,7 @@
 
         <!-- Submit Button -->
         <button pButton type="submit" class="p-button-primary w-full login-btn"
-          [label]="isLoading ? 'प्रवेश हो रहा है... (Signing In...)' : 'कार्यक्षेत्र में प्रवेश करें (Sign In)'"
+          [label]="isLoading ? 'Signing In...' : 'Sign In'"
           [icon]="isLoading ? 'pi pi-spin pi-spinner' : 'pi pi-sign-in'" [disabled]="isLoading">
         </button>
       </form>
@@ -62,12 +62,12 @@
       <!-- Demo Credentials Helper Pill -->
       <div class="demo-credentials-pill" (click)="fillDemoAdmin()" title="Click to autofill default credentials">
         <i class="pi pi-key"></i>
-        <span>डिफ़ॉल्ट एडमिन क्रेडेंशियल: <strong>admin / sutram</strong> (क्लिक करके भरें)</span>
+        <span>Default Admin: <strong>admin / sutram</strong> (click to autofill)</span>
       </div>
 
       <div class="login-footer-hint">
         <i class="pi pi-lock"></i>
-        <span>सुरक्षित सत्र (Session is protected with project-level access controls)</span>
+        <span>Session is protected with project-level access controls</span>
       </div>
     </div>
   </div>

@@ -58,10 +58,13 @@ const col = {
     id: () => ({ type: 'number' }),
 
     // Scalar types — return ColBuilder so .default() .required() .ref() can chain
-    number:  () => new ColBuilder('number'),
-    string:  () => new ColBuilder('string'),
-    boolean: () => new ColBuilder('boolean'),
-    json:    () => new ColBuilder('json'),
+    number:   () => new ColBuilder('number'),
+    string:   () => new ColBuilder('string'),
+    boolean:  () => new ColBuilder('boolean'),
+    json:     () => new ColBuilder('json'),
+    date:     () => new ColBuilder('date'),
+    datetime: () => new ColBuilder('datetime'),
+    password: () => new ColBuilder('password'),
 
     // hasOne shorthand — same as col.number().ref(...)
     // refPath: 'unit._id'

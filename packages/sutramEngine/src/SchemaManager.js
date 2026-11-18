@@ -319,6 +319,15 @@ class SchemaManager {
         if (!colRow) throw new Error(`[sutramEngine] Column "${columnName}" not found in "${tableName}"`);
         if (colRow.is_pk) throw new Error(`[sutramEngine] Cannot drop primary key column`);
 
+        const refs = this.getReferencingConstraints(tableName, columnName);
+        if (refs.length > 0) {
+            const err = new Error(
+                `Cannot drop column "${tableName}.${columnName}": referenced by ${refs.map(r => `"${r.table_name}.${r.column_name}"`).join(', ')}. Remove referencing foreign key(s) first.`
+            );
+            err.statusCode = 409;
+            throw err;
+        }
+
         this.db.transaction(() => {
             this.db.prepare(`DELETE FROM sys_column WHERE _id = ?`).run(colRow._id);
             this.db.prepare(`ALTER TABLE "${tableName}" DROP COLUMN "${columnName}"`).run();
@@ -357,16 +366,473 @@ class SchemaManager {
     }
 
     // ─────────────────────────────────────────────────────────
-    // DROP TABLE
+    // REFERENCING FK CONSTRAINTS CHECK (sys_column + SQLite PRAGMA)
+
+    getReferencingConstraints(tableName, columnName = null) {
+        const seen = new Set();
+        const refs = [];
+
+        // 1. Metadata check via sys_column
+        try {
+            const sysRefs = this.db.prepare(`
+                SELECT t.table_name, c.column_name, COALESCE(c.ref_col, '_id') as ref_col
+                FROM sys_column c
+                JOIN sys_table t ON t._id = c.table_id
+                WHERE c.ref_table = ? AND c.active = 1 AND t.active = 1 AND t.table_name != ?
+            `).all(tableName, tableName);
+
+            for (const r of sysRefs) {
+                if (columnName && r.ref_col !== columnName) continue;
+                const key = `${r.table_name}.${r.column_name}->${r.ref_col}`;
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    refs.push({ table_name: r.table_name, column_name: r.column_name, ref_col: r.ref_col || '_id' });
+                }
+            }
+        } catch {}
+
+        // 2. Physical SQLite DDL check via PRAGMA foreign_key_list across all physical tables
+        try {
+            const allPhysical = this.db.prepare(`
+                SELECT name FROM sqlite_master
+                WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'sys_%' AND name != ?
+            `).all(tableName);
+
+            for (const row of allPhysical) {
+                try {
+                    const fkList = this.db.prepare(`PRAGMA foreign_key_list("${row.name}")`).all();
+                    for (const fk of fkList) {
+                        if (fk.table !== tableName) continue;
+                        const targetCol = fk.to || '_id';
+                        if (columnName && targetCol !== columnName) continue;
+                        const key = `${row.name}.${fk.from}->${targetCol}`;
+                        if (!seen.has(key)) {
+                            seen.add(key);
+                            refs.push({ table_name: row.name, column_name: fk.from, ref_col: targetCol });
+                        }
+                    }
+                } catch {}
+            }
+        } catch {}
+
+        return refs;
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // TABLE IMPACT CHECK (for Edit / Delete safety warnings)
+
+    getTableImpact(tableName) {
+        const tableRow = this._getTable(tableName);
+        let rowCount = 0;
+        try {
+            rowCount = this.db.prepare(`SELECT COUNT(*) as c FROM "${tableName}"`).get()?.c || 0;
+        } catch {}
+
+        const referencingTables = this.getReferencingConstraints(tableName);
+
+        return {
+            table_name: tableName,
+            label: tableRow.label || tableName,
+            rowCount,
+            referencingTables
+        };
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // UPDATE TABLE (2-Tier Hybrid Strategy: Fast In-Place vs Atomic Shadow Rebuild)
+
+    updateTable(tableName, def = {}) {
+        const tableRow = this._getTable(tableName);
+        if (tableRow.is_system) {
+            throw new Error(`[sutramEngine] Cannot edit system table "${tableName}"`);
+        }
+
+        const { label, description, columns } = def;
+        const existingCols = this.db.prepare(
+            `SELECT * FROM sys_column WHERE table_id = ? AND active = 1 ORDER BY sort_order ASC`
+        ).all(tableRow._id);
+
+        const existingMap = new Map(existingCols.map(c => [c.column_name, c]));
+
+        // If only table label/description changed (no columns array provided)
+        if (!Array.isArray(columns) || columns.length === 0) {
+            const needTx = !this.db.inTransaction;
+            try {
+                if (needTx) this.db.prepare('BEGIN').run();
+                this.db.prepare(`
+                    UPDATE sys_table
+                    SET label = ?, description = ?, updated_at = datetime('now', 'localtime')
+                    WHERE _id = ?
+                `).run(label ?? tableRow.label, description !== undefined ? description : tableRow.description, tableRow._id);
+                if (needTx) this.db.prepare('COMMIT').run();
+            } catch (err) {
+                if (needTx && this.db.inTransaction) this.db.prepare('ROLLBACK').run();
+                throw err;
+            }
+            this.rebootstrap();
+            return { strategy: 'metadata-only', table_name: tableName, columnsCount: existingCols.length };
+        }
+
+        // Preserve mandatory _id and hl system columns
+        const incoming = columns.map((c, idx) => ({
+            ...c,
+            column_name: String(c.column_name || c.name || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '_'),
+            original_name: c.original_name ? String(c.original_name).trim() : null,
+            col_type: this._normalizeColType(c),
+            sort_order: c.sort_order ?? idx
+        })).filter(c => c.column_name);
+
+        if (!incoming.some(c => c.is_pk || c.column_name === '_id')) {
+            const origPk = existingMap.get('_id');
+            incoming.unshift({
+                column_name: '_id',
+                original_name: origPk ? '_id' : null,
+                label: origPk?.label || 'ID',
+                col_type: 'number',
+                sql_type: 'INTEGER',
+                is_pk: 1,
+                is_required: 0,
+                sort_order: 0
+            });
+        }
+        if (!incoming.some(c => c.column_name === 'hl')) {
+            const origHl = existingMap.get('hl');
+            incoming.push({
+                column_name: 'hl',
+                original_name: origHl ? 'hl' : null,
+                label: origHl?.label || 'Highlight Flag',
+                col_type: 'number',
+                sql_type: 'TINYINT',
+                is_pk: 0,
+                is_required: 0,
+                default_value: '0',
+                sort_order: incoming.length
+            });
+        }
+
+        // Validate duplicate names
+        const seenNames = new Set();
+        for (const c of incoming) {
+            if (seenNames.has(c.column_name)) {
+                throw new Error(`[sutramEngine] Duplicate column name "${c.column_name}"`);
+            }
+            seenNames.add(c.column_name);
+        }
+
+        // Inspect physical SQLite columns & indexes
+        const pragmaCols = this.db.prepare(`PRAGMA table_info("${tableName}")`).all();
+        const physicalNames = new Set(pragmaCols.map(p => p.name));
+        const pragmaIndexes = this.db.prepare(`PRAGMA index_list("${tableName}")`).all();
+        const indexedCols = new Set();
+        for (const idx of pragmaIndexes) {
+            const info = this.db.prepare(`PRAGMA index_info("${idx.name}")`).all();
+            for (const ic of info) indexedCols.add(ic.name);
+        }
+
+        // Categorize changes
+        const keptOriginalNames = new Set();
+        const addedCols = [];
+        const renamedCols = [];
+        let needsRebuild = false;
+
+        const isNumericAffinity = (t) => ['number', 'boolean'].includes(String(t || '').toLowerCase());
+
+        for (const col of incoming) {
+            const origKey = col.original_name && existingMap.has(col.original_name)
+                ? col.original_name
+                : (existingMap.has(col.column_name) ? col.column_name : null);
+
+            if (!origKey) {
+                addedCols.push(col);
+                // SQLite ADD COLUMN cannot add NOT NULL without default, UNIQUE, or non-constant expression default
+                if (
+                    col.is_unique ||
+                    col.default_type === 'CURRENT_TIMESTAMP' ||
+                    (col.is_required && (col.default_value === undefined || col.default_value === null || String(col.default_value).trim() === ''))
+                ) {
+                    needsRebuild = true;
+                }
+            } else {
+                keptOriginalNames.add(origKey);
+                const prev = existingMap.get(origKey);
+                if (origKey !== col.column_name) {
+                    renamedCols.push({ from: origKey, to: col.column_name });
+                }
+                // Check structural changes requiring Tier 2 Shadow Rebuild
+                const prevReq = prev.is_required ? 1 : 0;
+                const nextReq = col.is_required ? 1 : 0;
+                const prevDef = prev.default_value ?? null;
+                const nextDef = (col.default_value !== undefined && col.default_value !== null && String(col.default_value).trim() !== '')
+                    ? String(col.default_value) : null;
+                const prevRef = `${prev.ref_table || ''}.${prev.ref_col || ''}`;
+                const nextRef = `${col.ref_table || ''}.${col.ref_col || ''}`;
+
+                if (
+                    prevReq !== nextReq ||
+                    prevDef !== nextDef ||
+                    prevRef !== nextRef ||
+                    col.is_unique ||
+                    isNumericAffinity(prev.col_type) !== isNumericAffinity(col.col_type)
+                ) {
+                    needsRebuild = true;
+                }
+            }
+        }
+
+        const removedCols = existingCols.filter(c =>
+            c.column_name !== '_id' &&
+            c.column_name !== 'hl' &&
+            !keptOriginalNames.has(c.column_name)
+        );
+
+        for (const rc of removedCols) {
+            const colRefs = this.getReferencingConstraints(tableName, rc.column_name);
+            if (colRefs.length > 0) {
+                const err = new Error(
+                    `Cannot remove column "${tableName}.${rc.column_name}": it is referenced by ${colRefs.map(r => `"${r.table_name}.${r.column_name}"`).join(', ')}. Delete or update the referencing table(s) first.`
+                );
+                err.statusCode = 409;
+                throw err;
+            }
+            if (indexedCols.has(rc.column_name) || rc.ref_table) {
+                needsRebuild = true;
+            }
+        }
+
+        let strategy = 'in-place';
+
+        if (!needsRebuild) {
+            // ── TIER 1: Fast In-Place Alteration ──────────────────
+            const needTx = !this.db.inTransaction;
+            try {
+                if (needTx) this.db.prepare('BEGIN IMMEDIATE').run();
+
+                this.db.prepare(`
+                    UPDATE sys_table
+                    SET label = ?, description = ?, updated_at = datetime('now', 'localtime')
+                    WHERE _id = ?
+                `).run(label ?? tableRow.label, description !== undefined ? description : tableRow.description, tableRow._id);
+
+                for (const ren of renamedCols) {
+                    if (physicalNames.has(ren.from)) {
+                        this.db.prepare(`ALTER TABLE "${tableName}" RENAME COLUMN "${ren.from}" TO "${ren.to}"`).run();
+                        physicalNames.delete(ren.from);
+                        physicalNames.add(ren.to);
+                    }
+                    // Update any incoming FKs referencing the renamed column
+                    this.db.prepare(`
+                        UPDATE sys_column SET ref_col = ? WHERE ref_table = ? AND ref_col = ?
+                    `).run(ren.to, tableName, ren.from);
+                }
+
+                for (const rc of removedCols) {
+                    if (physicalNames.has(rc.column_name)) {
+                        this.db.prepare(`ALTER TABLE "${tableName}" DROP COLUMN "${rc.column_name}"`).run();
+                        physicalNames.delete(rc.column_name);
+                    }
+                }
+
+                for (const ac of addedCols) {
+                    if (!physicalNames.has(ac.column_name)) {
+                        this.db.prepare(this._buildAlterAddColumn(tableName, ac)).run();
+                        physicalNames.add(ac.column_name);
+                    }
+                }
+
+                // Refresh sys_column cleanly
+                this.db.prepare(`DELETE FROM sys_column WHERE table_id = ?`).run(tableRow._id);
+                for (let i = 0; i < incoming.length; i++) {
+                    this._insertColumn(tableRow._id, incoming[i], i);
+                }
+
+                // Create requested indexes on new columns
+                for (const col of incoming) {
+                    if (col.has_index && col.column_name !== '_id') {
+                        const idxName = `idx_${tableName}_${col.column_name}`;
+                        this.db.prepare(`CREATE INDEX IF NOT EXISTS "${idxName}" ON "${tableName}"("${col.column_name}")`).run();
+                    }
+                }
+
+                if (needTx) this.db.prepare('COMMIT').run();
+            } catch (err) {
+                if (needTx && this.db.inTransaction) this.db.prepare('ROLLBACK').run();
+                throw err;
+            }
+        } else {
+            // ── TIER 2: Atomic Shadow-Table Rebuild ───────────────
+            strategy = 'rebuild';
+            const shadowName = `__sutram_rebuild_${tableName}_${Date.now()}`;
+            const oldCount = this.db.prepare(`SELECT COUNT(*) as c FROM "${tableName}"`).get()?.c || 0;
+
+            this.db.pragma('foreign_keys = OFF');
+            const needTx = !this.db.inTransaction;
+            try {
+                if (needTx) this.db.prepare('BEGIN IMMEDIATE').run();
+
+                // 1. Create shadow table with updated schema
+                this.db.prepare(this._buildCreateSQL(shadowName, incoming)).run();
+
+                // 2. Map & copy all existing rows with safe COALESCE / updated-default fallback
+                const destCols = [];
+                const selectExprs = [];
+                const toDefaultExpr = (col) => {
+                    if (col.default_type === 'CURRENT_TIMESTAMP') {
+                        return `datetime('now', 'localtime')`;
+                    }
+                    if (isNumericAffinity(col.col_type)) {
+                        return (col.default_value !== undefined && col.default_value !== null && String(col.default_value).trim() !== '' && !isNaN(Number(col.default_value)))
+                            ? String(Number(col.default_value))
+                            : '0';
+                    }
+                    return `'${String(col.default_value ?? '').replace(/'/g, "''")}'`;
+                };
+
+                for (const col of incoming) {
+                    const srcName = col.original_name && physicalNames.has(col.original_name)
+                        ? col.original_name
+                        : (physicalNames.has(col.column_name) ? col.column_name : null);
+
+                    const origMeta = srcName ? existingMap.get(srcName) : null;
+                    const prevDefNorm = origMeta?.default_value !== undefined && origMeta?.default_value !== null && String(origMeta.default_value).trim() !== ''
+                        ? String(origMeta.default_value) : null;
+                    const nextDefNorm = col.default_value !== undefined && col.default_value !== null && String(col.default_value).trim() !== ''
+                        ? String(col.default_value) : null;
+                    const hasExplicitNewDefault = (nextDefNorm !== null || col.default_type === 'CURRENT_TIMESTAMP') && nextDefNorm !== prevDefNorm;
+
+                    if (srcName) {
+                        destCols.push(`"${col.column_name}"`);
+                        if ((col.is_required && !col.is_pk) || (hasExplicitNewDefault && !col.is_pk)) {
+                            const fallback = toDefaultExpr(col);
+                            if (isNumericAffinity(col.col_type)) {
+                                selectExprs.push(`COALESCE("${srcName}", ${fallback})`);
+                            } else {
+                                selectExprs.push(`CASE WHEN "${srcName}" IS NULL OR "${srcName}" = '' THEN ${fallback} ELSE "${srcName}" END`);
+                            }
+                        } else {
+                            selectExprs.push(`"${srcName}"`);
+                        }
+                    } else if (!col.is_pk && (col.is_required || nextDefNorm !== null || col.default_type === 'CURRENT_TIMESTAMP')) {
+                        // Brand-new column with NOT NULL or an explicit default value: populate all existing rows immediately
+                        destCols.push(`"${col.column_name}"`);
+                        selectExprs.push(toDefaultExpr(col));
+                    }
+                }
+
+                if (physicalNames.has('created_at')) {
+                    destCols.push(`"created_at"`);
+                    selectExprs.push(`"created_at"`);
+                }
+                if (physicalNames.has('updated_at')) {
+                    destCols.push(`"updated_at"`);
+                    selectExprs.push(`"updated_at"`);
+                }
+
+                if (oldCount > 0 && destCols.length > 0) {
+                    this.db.prepare(
+                        `INSERT INTO "${shadowName}" (${destCols.join(', ')}) SELECT ${selectExprs.join(', ')} FROM "${tableName}"`
+                    ).run();
+                }
+
+                // 3. Verify row count strictly matches (zero data loss check)
+                const newCount = this.db.prepare(`SELECT COUNT(*) as c FROM "${shadowName}"`).get()?.c || 0;
+                if (newCount !== oldCount) {
+                    throw new Error(`[sutramEngine] Shadow rebuild row count mismatch (${newCount} !== ${oldCount}) — rolled back safely.`);
+                }
+
+                // 4. Swap tables
+                this.db.prepare(`DROP TABLE "${tableName}"`).run();
+                this.db.prepare(`ALTER TABLE "${shadowName}" RENAME TO "${tableName}"`).run();
+
+                // 5. Recreate custom indexes
+                for (const col of incoming) {
+                    if (col.has_index && col.column_name !== '_id') {
+                        const idxName = `idx_${tableName}_${col.column_name}`;
+                        this.db.prepare(`CREATE INDEX IF NOT EXISTS "${idxName}" ON "${tableName}"("${col.column_name}")`).run();
+                    }
+                }
+
+                // 6. Update sys_table & sys_column metadata
+                this.db.prepare(`
+                    UPDATE sys_table
+                    SET label = ?, description = ?, updated_at = datetime('now', 'localtime')
+                    WHERE _id = ?
+                `).run(label ?? tableRow.label, description !== undefined ? description : tableRow.description, tableRow._id);
+
+                for (const ren of renamedCols) {
+                    this.db.prepare(`
+                        UPDATE sys_column SET ref_col = ? WHERE ref_table = ? AND ref_col = ?
+                    `).run(ren.to, tableName, ren.from);
+                }
+
+                this.db.prepare(`DELETE FROM sys_column WHERE table_id = ?`).run(tableRow._id);
+                for (let i = 0; i < incoming.length; i++) {
+                    this._insertColumn(tableRow._id, incoming[i], i);
+                }
+
+                // 7. Verify FK integrity on rebuilt table
+                const fkViolations = this.db.prepare(`PRAGMA foreign_key_check("${tableName}")`).all();
+                if (fkViolations.length > 0) {
+                    throw new Error(`[sutramEngine] Foreign key check failed on "${tableName}" (${fkViolations.length} violation(s)) — rolled back safely.`);
+                }
+
+                if (needTx) this.db.prepare('COMMIT').run();
+            } catch (err) {
+                if (needTx && this.db.inTransaction) this.db.prepare('ROLLBACK').run();
+                try { this.db.prepare(`DROP TABLE IF EXISTS "${shadowName}"`).run(); } catch {}
+                throw err;
+            } finally {
+                this.db.pragma('foreign_keys = ON');
+            }
+        }
+
+        this.rebootstrap();
+        console.log(`[sutramEngine] ✓ Table "${tableName}" updated via ${strategy} (${incoming.length} columns)`);
+        return {
+            strategy,
+            table_name: tableName,
+            label: label ?? tableRow.label,
+            columnsCount: incoming.length,
+            addedColumns: addedCols.map(c => c.column_name),
+            removedColumns: removedCols.map(c => c.column_name),
+            renamedColumns: renamedCols
+        };
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // DROP TABLE (Strictly enforces Foreign Key Integrity — DDL)
 
     dropTable(tableName) {
         const tableRow = this._getTable(tableName);
         if (tableRow.is_system) throw new Error(`[sutramEngine] Cannot drop system table "${tableName}"`);
 
-        this.db.transaction(() => {
+        // STRICT DDL FK CHECK: Cannot delete a source/parent table while any child table references it
+        const refs = this.getReferencingConstraints(tableName);
+        if (refs.length > 0) {
+            const refList = refs.map(r => `"${r.table_name}" (column: ${r.column_name})`).join(', ');
+            const err = new Error(
+                `Cannot delete table "${tableName}" because it is referenced by: ${refList}. Delete the referencing table(s) or remove their foreign key columns first.`
+            );
+            err.statusCode = 409;
+            throw err;
+        }
+
+        const needTx = !this.db.inTransaction;
+        try {
+            if (needTx) this.db.prepare('BEGIN IMMEDIATE').run();
+            // Clean up auxiliary sys_ metadata tables if present
+            try { this.db.prepare(`DELETE FROM sys_user_rights WHERE table_name = ?`).run(tableName); } catch {}
+            try { this.db.prepare(`DELETE FROM sys_column_security WHERE table_name = ?`).run(tableName); } catch {}
+            try { this.db.prepare(`DELETE FROM sys_ui_table WHERE table_name = ?`).run(tableName); } catch {}
+            try { this.db.prepare(`DELETE FROM sys_ui_column WHERE table_name = ?`).run(tableName); } catch {}
+            this.db.prepare(`DELETE FROM sys_column WHERE table_id = ?`).run(tableRow._id);
+            this.db.prepare(`DELETE FROM sys_join WHERE table_id = ?`).run(tableRow._id);
             this.db.prepare(`DELETE FROM sys_table WHERE _id = ?`).run(tableRow._id);
             this.db.prepare(`DROP TABLE IF EXISTS "${tableName}"`).run();
-        })();
+            if (needTx) this.db.prepare('COMMIT').run();
+        } catch (err) {
+            if (needTx && this.db.inTransaction) this.db.prepare('ROLLBACK').run();
+            throw err;
+        }
 
         this.rebootstrap();
         console.log(`[sutramEngine] ✓ Table "${tableName}" dropped`);
@@ -674,23 +1140,31 @@ class SchemaManager {
         })();
     }
 
+    _normalizeColType(col) {
+        const sqlUpper = String(col.sql_type || '').toUpperCase();
+        if (sqlUpper === 'DATE') return 'date';
+        if (sqlUpper === 'DATETIME') return 'datetime';
+        if (sqlUpper === 'PASSWORD') return 'password';
+        if (sqlUpper === 'FK') return 'number';
+
+        let normalizedType = String(col.col_type || 'string').toLowerCase();
+        if (['number', 'string', 'boolean', 'json', 'date', 'datetime', 'password'].includes(normalizedType)) {
+            return normalizedType;
+        }
+        if (['int', 'integer', 'bigint', 'decimal', 'numeric', 'float', 'fk'].includes(normalizedType)) {
+            return 'number';
+        }
+        if (normalizedType === 'tinyint') return 'boolean';
+        if (['pwd', 'secret', 'secret_hash'].includes(normalizedType)) return 'password';
+        return 'string';
+    }
+
     _insertColumn(tableId, col, sortOrder) {
         const refSelectVal = Array.isArray(col.ref_select)
             ? JSON.stringify(col.ref_select)
             : (col.ref_select ? String(col.ref_select) : null);
 
-        let normalizedType = String(col.col_type || 'string').toLowerCase();
-        if (!['number', 'string', 'boolean', 'json', 'password'].includes(normalizedType)) {
-            if (['int', 'integer', 'bigint', 'decimal', 'numeric', 'float', 'fk'].includes(normalizedType)) {
-                normalizedType = 'number';
-            } else if (normalizedType === 'tinyint') {
-                normalizedType = 'boolean';
-            } else if (['password', 'pwd', 'secret', 'secret_hash'].includes(normalizedType)) {
-                normalizedType = 'password';
-            } else {
-                normalizedType = 'string';
-            }
-        }
+        const normalizedType = this._normalizeColType(col);
 
         this.db.prepare(`
             INSERT INTO sys_column
@@ -754,6 +1228,8 @@ class SchemaManager {
                 const upperSql = String(col.sql_type).toUpperCase();
                 if (upperSql === 'PASSWORD') {
                     colDef += ` VARCHAR(${col.length_precision || 255})`;
+                } else if (upperSql === 'FK') {
+                    colDef += ' INTEGER';
                 } else if (col.length_precision && ['VARCHAR', 'CHAR', 'DECIMAL', 'NUMERIC', 'FLOAT'].includes(upperSql)) {
                     colDef += ` ${upperSql}(${col.length_precision})`;
                 } else if (upperSql === 'ENUM' && col.length_precision) {
@@ -766,6 +1242,8 @@ class SchemaManager {
                 switch (col.col_type) {
                     case 'number': colDef += ' DECIMAL(10,2)'; break;
                     case 'boolean': colDef += ' TINYINT'; break;
+                    case 'date': colDef += ' DATE'; break;
+                    case 'datetime': colDef += ' DATETIME'; break;
                     case 'json': colDef += ' TEXT'; break;
                     case 'password': colDef += ` VARCHAR(${col.length_precision || 255})`; break;
                     default: colDef += ' TEXT';
@@ -786,10 +1264,7 @@ class SchemaManager {
             }
 
             if (col.ref_table && col.ref_col) {
-                colDef += ` REFERENCES "${col.ref_table}"("${col.ref_col}")`;
-                if (col.on_delete) {
-                    colDef += ` ON DELETE ${col.on_delete}`;
-                }
+                colDef += ` REFERENCES "${col.ref_table}"("${col.ref_col}") ON DELETE ${col.on_delete || 'RESTRICT'}`;
             }
 
             parts.push(colDef);
@@ -809,6 +1284,8 @@ class SchemaManager {
             const upperSql = String(col.sql_type).toUpperCase();
             if (upperSql === 'PASSWORD') {
                 def += ` VARCHAR(${col.length_precision || 255})`;
+            } else if (upperSql === 'FK') {
+                def += ' INTEGER';
             } else if (col.length_precision && ['VARCHAR', 'CHAR', 'DECIMAL', 'NUMERIC', 'FLOAT'].includes(upperSql)) {
                 def += ` ${upperSql}(${col.length_precision})`;
             } else {
@@ -819,6 +1296,8 @@ class SchemaManager {
             switch (col.col_type) {
                 case 'number': def += ' DECIMAL(10,2)'; break;
                 case 'boolean': def += ' TINYINT'; break;
+                case 'date': def += ' DATE'; break;
+                case 'datetime': def += ' DATETIME'; break;
                 case 'json': def += ' TEXT'; break;
                 case 'password': def += ` VARCHAR(${col.length_precision || 255})`; break;
                 default: def += ' TEXT';
@@ -832,7 +1311,7 @@ class SchemaManager {
         }
 
         if (col.ref_table && col.ref_col) {
-            def += ` REFERENCES "${col.ref_table}"("${col.ref_col}")`;
+            def += ` REFERENCES "${col.ref_table}"("${col.ref_col}") ON DELETE ${col.on_delete || 'RESTRICT'}`;
         }
 
         return def;
