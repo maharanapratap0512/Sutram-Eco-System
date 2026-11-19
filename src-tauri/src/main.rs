@@ -276,32 +276,21 @@ fn start_backend_if_needed() -> Option<Child> {
             cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
 
-        match cmd.spawn() {
-            Ok(mut proc) => {
-                log_msg("Backend node process spawned successfully. Waiting up to 20 seconds for port 3300...");
-                for i in 1..=100 {
-                    if is_server_running() {
-                        log_msg(&format!("Backend ready on port 3300 after ~{} ms!", i * 200));
-                        return Some(proc);
-                    }
-                    if let Ok(Some(status)) = proc.try_wait() {
-                        log_msg(&format!("ERROR: Backend node process exited prematurely with status: {}", status));
-                        return None;
-                    }
-                    std::thread::sleep(Duration::from_millis(200));
+        let child = cmd.spawn();
+
+        if let Ok(proc) = child {
+            // Wait for server to bind port 3300 (up to 7.5s for first cold boot on slower disks)
+            for _ in 0..30 {
+                if is_server_running() {
+                    break;
                 }
-                log_msg("WARNING: Port 3300 not yet open after 20s. Backend is still running; background navigator will monitor.");
-                Some(proc)
+                std::thread::sleep(Duration::from_millis(250));
             }
-            Err(e) => {
-                log_msg(&format!("ERROR: Failed to spawn node process: {}", e));
-                None
-            }
+            return Some(proc);
         }
-    } else {
-        log_msg("ERROR: Could not locate sutramServer/server.js in any candidate directory.");
-        None
     }
+
+    None
 }
 
 fn main() {

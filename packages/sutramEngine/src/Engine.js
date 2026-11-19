@@ -301,13 +301,56 @@ class Engine {
         const tbl = this.table(tableName);
         const oldRows = tbl.getAll(where, { full: false });
 
-        return this.db.transaction(() => {
+        // STRICT DML FOREIGN KEY INTEGRITY CHECK:
+        // Block deleting parent rows if any child table still references them
+        if (oldRows.length > 0 && this.schema && typeof this.schema.getReferencingConstraints === 'function') {
+            const refs = this.schema.getReferencingConstraints(tableName);
+            const rawDb = this.db.db || this.db;
+            for (const ref of refs) {
+                const targetCol = ref.ref_col || '_id';
+                const targetVals = [...new Set(
+                    oldRows.map(r => r[targetCol]).filter(v => v !== null && v !== undefined)
+                )];
+                if (targetVals.length === 0) continue;
+
+                const placeholders = targetVals.map(() => '?').join(', ');
+                try {
+                    const hit = rawDb.prepare(
+                        `SELECT COUNT(*) as c FROM "${ref.table_name}" WHERE "${ref.column_name}" IN (${placeholders})`
+                    ).get(...targetVals);
+                    if (hit && hit.c > 0) {
+                        const err = new Error(
+                            `Cannot delete record from "${tableName}": ${hit.c} linked record(s) exist in "${ref.table_name}" (column: ${ref.column_name}). Delete or update those record(s) in "${ref.table_name}" first.`
+                        );
+                        err.statusCode = 409;
+                        throw err;
+                    }
+                } catch (checkErr) {
+                    if (checkErr.statusCode === 409) throw checkErr;
+                }
+            }
+        }
+
+        const needTx = !this.db.inTransaction;
+        try {
+            if (needTx) this.db.prepare('BEGIN IMMEDIATE').run();
             const count = tbl.delete(where);
             for (const oldRow of oldRows) {
                 this.trigger.execute(tableName, 'DELETE', null, oldRow);
             }
+            if (needTx) this.db.prepare('COMMIT').run();
             return count;
-        })();
+        } catch (err) {
+            if (needTx && this.db.inTransaction) this.db.prepare('ROLLBACK').run();
+            if (err && /FOREIGN KEY constraint failed/i.test(err.message || '')) {
+                const fkErr = new Error(
+                    `Cannot delete record from "${tableName}": it is still referenced by another table. Delete the referencing record(s) first.`
+                );
+                fkErr.statusCode = 409;
+                throw fkErr;
+            }
+            throw err;
+        }
     }
 
     deleteById(tableName, id) {

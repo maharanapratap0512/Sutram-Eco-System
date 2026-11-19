@@ -24,11 +24,11 @@ export class MasterLoginComponent {
 
   public onLogin(): void {
     if (!this.username?.trim()) {
-      this.errorMessage = 'कृपया यूज़रनेम दर्ज करें (Please enter username)';
+      this.errorMessage = 'Please enter username';
       return;
     }
     if (!this.password?.trim()) {
-      this.errorMessage = 'कृपया पासवर्ड दर्ज करें (Please enter password)';
+      this.errorMessage = 'Please enter password';
       return;
     }
 
@@ -41,13 +41,13 @@ export class MasterLoginComponent {
         if (res && res.success && res.result) {
           this.loginSuccess.emit(res.result);
         } else {
-          this.errorMessage = res?.error || 'अमान्य यूज़रनेम या पासवर्ड (Invalid username or password)';
+          this.errorMessage = res?.error || 'Invalid username or password';
         }
         this.cdr.markForCheck();
       },
       error: (err) => {
         this.isLoading = false;
-        this.errorMessage = err?.error?.error || err?.message || 'सर्वर से संपर्क करने में त्रुटि (Connection failed)';
+        this.errorMessage = err?.error?.error || err?.message || 'Connection failed';
         this.cdr.markForCheck();
       }
     });

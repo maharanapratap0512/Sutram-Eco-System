@@ -582,4 +582,18 @@ export class SutramExcelApiService {
   public dismissReminder(logId: number | string, user?: string, reason?: string): Observable<any> {
     return this.http.post<ApiResponse<any>>(this.buildApiUrl(`/api/_sutram/reminders/dismiss/${encodeURIComponent(logId)}`), { user, reason });
   }
+
+  /**
+   * GET /api/_sutram/schema/table-detail/:tableName
+   */
+  public getTableDetail(tableName: string): Observable<ApiResponse<any>> {
+    return this.http.get<ApiResponse<any>>(this.buildApiUrl(`/api/_sutram/schema/table-detail/${encodeURIComponent(tableName)}`));
+  }
+
+  /**
+   * DELETE /api/_sutram/schema/tables/:tableName
+   */
+  public deleteTable(tableName: string): Observable<ApiResponse<any>> {
+    return this.http.delete<ApiResponse<any>>(this.buildApiUrl(`/api/_sutram/schema/tables/${encodeURIComponent(tableName)}`));
+  }
 }

@@ -87,11 +87,11 @@ export class LanNetworkDialogComponent implements OnInit, OnDestroy {
     if (!this.sharingTargetProject) return;
 
     if (this.shareAuthType === 'pin' && (!this.sharePin || this.sharePin.trim().length < 4)) {
-      this.shareError = 'कृपया कम से कम 4 अंकों का पिन दर्ज करें (Minimum 4 digits PIN required)';
+      this.shareError = 'Minimum 4 digits PIN required';
       return;
     }
     if (this.shareAuthType === 'password' && (!this.sharePassword || this.sharePassword.trim().length < 4)) {
-      this.shareError = 'कृपया कम से कम 4 अक्षरों का पासवर्ड दर्ज करें (Minimum 4 characters Password required)';
+      this.shareError = 'Minimum 4 characters password required';
       return;
     }
 
@@ -162,7 +162,7 @@ export class LanNetworkDialogComponent implements OnInit, OnDestroy {
     if (!this.selectedRemotePeer || !this.selectedRemoteProject || !this.authChallenge) return;
 
     if (!this.authSecretInput || this.authSecretInput.trim().length === 0) {
-      this.authError = 'कृपया पिन या पासवर्ड दर्ज करें';
+      this.authError = 'Please enter PIN or password';
       return;
     }
 
@@ -178,12 +178,12 @@ export class LanNetworkDialogComponent implements OnInit, OnDestroy {
           this.isAuthModalOpen = false;
           this.openRemoteProject(remoteBaseUrl, this.selectedRemoteProject.id, res.token);
         } else {
-          this.authError = res.error || 'अमान्य पिन/पासवर्ड (Authentication Failed)';
+          this.authError = res.error || 'Invalid PIN or password';
         }
       },
       error: (err) => {
         this.isAuthenticating = false;
-        this.authError = err?.error?.error || 'सत्यापन विफल हुआ (Authentication Failed)';
+        this.authError = err?.error?.error || 'Authentication failed';
       }
     });
   }

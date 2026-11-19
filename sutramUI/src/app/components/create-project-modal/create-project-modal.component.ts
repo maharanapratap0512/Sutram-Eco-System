@@ -124,13 +124,13 @@ export class CreateProjectModalComponent implements OnChanges {
             this.projectName = rawName;
           }
         } else {
-          this.errorMessage = 'डेटाबेस फ़ाइल अपलोड विफल हुई';
+          this.errorMessage = 'Database file upload failed';
         }
         this.cdr.markForCheck();
       },
       error: (err) => {
         this.isUploading = false;
-        this.errorMessage = err?.error?.error || err?.message || 'फ़ाइल अपलोड एवं निरीक्षण विफल';
+        this.errorMessage = err?.error?.error || err?.message || 'File upload & inspection failed';
         this.cdr.markForCheck();
       }
     });
@@ -181,17 +181,17 @@ export class CreateProjectModalComponent implements OnChanges {
   public submitCreate(): void {
     this.errorMessage = '';
     if (!this.projectContext.canCreateProject) {
-      this.errorMessage = 'अनुमति अस्वीकृत: आपके पास नया प्रोजेक्ट बनाने का अधिकार नहीं है (Permission Denied)';
+      this.errorMessage = 'Permission Denied: You do not have permission to create projects';
       return;
     }
 
     if (this.activeMode === 'upload' && !this.tempFileKey) {
-      this.errorMessage = 'कृपया आगे बढ़ने से पहले एक वैध SQLite डेटाबेस फ़ाइल (.db) चुनें।';
+      this.errorMessage = 'Please select a valid SQLite database file (.db) first';
       return;
     }
 
     if (!this.projectName || !this.projectName.trim()) {
-      this.errorMessage = 'प्रोजेक्ट का नाम अनिवार्य है (Project name is required)';
+      this.errorMessage = 'Project name is required';
       return;
     }
 
@@ -246,7 +246,7 @@ export class CreateProjectModalComponent implements OnChanges {
           }
         } else {
           this.isCreating = false;
-          this.errorMessage = res?.message || 'त्रुटि: प्रोजेक्ट नहीं बन सका';
+          this.errorMessage = res?.message || 'Error: Could not create project';
           this.commandLogs.push(`[ERROR] ${this.errorMessage}`);
           this.cdr.markForCheck();
         }

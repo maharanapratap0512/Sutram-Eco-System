@@ -39,7 +39,7 @@ module.exports = [
             table_id       INTEGER NOT NULL REFERENCES sys_table(_id) ON DELETE CASCADE,
             column_name    TEXT NOT NULL,
             label          TEXT,
-            col_type       TEXT NOT NULL CHECK(col_type IN ('number','string','boolean','json')),
+            col_type       TEXT NOT NULL CHECK(col_type IN ('number','string','boolean','json','date','datetime','password')),
             is_required    INTEGER DEFAULT 0,
             default_value  TEXT,
             is_pk          INTEGER DEFAULT 0,
@@ -488,6 +488,39 @@ module.exports = [
             target_table = (SELECT r.target_table FROM sys_reminder_rule r WHERE r._id = sys_reminder_log.rule_id),
             target_column = (SELECT r.target_column FROM sys_reminder_rule r WHERE r._id = sys_reminder_log.rule_id)
          WHERE rule_name IS NULL`
+    ],
+
+    // ─────────────────────────────────────────────────────────
+    // Upgrade sys_column CHECK constraint to support date, datetime, password
+    // ─────────────────────────────────────────────────────────
+    [
+        `CREATE TABLE IF NOT EXISTS __sys_column_new (
+            _id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            table_id       INTEGER NOT NULL REFERENCES sys_table(_id) ON DELETE CASCADE,
+            column_name    TEXT NOT NULL,
+            label          TEXT,
+            col_type       TEXT NOT NULL CHECK(col_type IN ('number','string','boolean','json','date','datetime','password')),
+            is_required    INTEGER DEFAULT 0,
+            default_value  TEXT,
+            is_pk          INTEGER DEFAULT 0,
+            ref_table      TEXT,
+            ref_col        TEXT,
+            ref_as         TEXT,
+            ref_select     TEXT,
+            sort_order     INTEGER DEFAULT 0,
+            active         INTEGER DEFAULT 1,
+            created_at     TEXT DEFAULT (datetime('now', 'localtime')),
+            UNIQUE(table_id, column_name)
+        )`,
+        `INSERT INTO __sys_column_new
+            (_id, table_id, column_name, label, col_type, is_required, default_value,
+             is_pk, ref_table, ref_col, ref_as, ref_select, sort_order, active, created_at)
+         SELECT
+            _id, table_id, column_name, label, col_type, is_required, default_value,
+            is_pk, ref_table, ref_col, ref_as, ref_select, sort_order, active, created_at
+         FROM sys_column`,
+        `DROP TABLE sys_column`,
+        `ALTER TABLE __sys_column_new RENAME TO sys_column`
     ]
 
 ];

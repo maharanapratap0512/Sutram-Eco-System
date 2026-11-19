@@ -51,7 +51,7 @@
       class="p-button-sm p-button-rounded p-button-text lan-header-btn"
       (click)="openLanModal.emit()"
       icon="pi pi-globe"
-      [title]="'लोकल नेटवर्क शेयरिंग (LAN Sharing - ' + ((lanService.peers$ | async)?.length || 0) + ' Peers)'">
+      [title]="'LAN Network & Sharing (' + ((lanService.peers$ | async)?.length || 0) + ' Peers)'">
       <span class="lan-count-badge" *ngIf="((lanService.peers$ | async)?.length || 0) > 0">
         {{ (lanService.peers$ | async)?.length }}
       </span>
@@ -64,7 +64,7 @@
       class="p-button-sm p-button-rounded p-button-text update-header-btn"
       (click)="openUpdateModal.emit()"
       icon="pi pi-sync"
-      title="सॉफ़्टवेयर अपडेट (Sutram Updater)">
+      title="Sutram Updater">
     </button>
 
     <!-- Active User Profile Pill -->
@@ -91,7 +91,7 @@
       class="p-button-sm p-button-rounded p-button-text p-button-danger logout-btn ms-1"
       (click)="logout.emit()"
       icon="pi pi-sign-out"
-      title="लॉग आउट करें (Logout)">
+      title="Logout">
     </button>
   </div>
 </header>

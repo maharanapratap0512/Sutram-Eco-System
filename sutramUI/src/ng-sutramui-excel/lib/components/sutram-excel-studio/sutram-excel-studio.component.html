@@ -29,7 +29,7 @@
                   (click)="setTopTab('tables')">
             <i class="pi pi-database"></i>
             <span>Tables</span>
-            <span class="ribbon-badge">{{ tablesList.length }}</span>
+            <span class="ribbon-badge">{{ permittedTablesCount }}</span>
           </button>
           <button type="button"
                   class="ribbon-tab-btn"
@@ -343,8 +343,9 @@
 
         <!-- Small simple boxes for each table -->
         <div class="ribbon-boxes-track">
-          <!-- 1st Small Box: Create New Table -->
-          <div class="ribbon-small-box create-table-box"
+          <!-- 1st Small Box: Create New Table (Admin Only) -->
+          <div *ngIf="isAdmin"
+               class="ribbon-small-box create-table-box"
                (click)="openCreateTable()"
                title="Create new table in this database">
             <div class="box-icon-wrap">
@@ -360,15 +361,16 @@
                class="ribbon-small-box"
                [class.active-box]="isTableOpen(tbl.table)"
                (click)="openTableInSheet(tbl.table)"
+               (contextmenu)="openTableActionMenu($event, tbl)"
                [title]="tbl.display_name ? (tbl.display_name + ' (' + tbl.table + ')') : tbl.table">
 
-            <!-- Corner Star Favorite Button -->
+            <!-- Top-Right Vertical 3-Dot Action Menu Button (Option A) -->
             <button type="button"
-                    class="box-star-btn"
-                    [class.starred]="favoriteTables.has(tbl.table)"
-                    (click)="toggleFavoriteTable(tbl.table, $event)"
-                    [title]="favoriteTables.has(tbl.table) ? 'Remove favorite' : 'Add to startup sheets'">
-              <i class="pi" [ngClass]="favoriteTables.has(tbl.table) ? 'pi-star-fill' : 'pi-star'"></i>
+                    class="box-menu-btn"
+                    [class.menu-open]="tableActionMenu.visible && tableActionMenu.table === tbl.table"
+                    (click)="openTableActionMenu($event, tbl)"
+                    title="Table actions (Edit, Favorite, Delete)">
+              <i class="pi pi-ellipsis-v"></i>
             </button>
 
             <div class="box-icon-wrap">
@@ -377,7 +379,14 @@
             <div class="box-info">
               <span class="box-name-eng-main">{{ tbl.display_name || tbl.table }}</span>
             </div>
-            <span *ngIf="isTableOpen(tbl.table)" class="box-dot" title="Sheet open"></span>
+
+            <!-- Bottom-Right Compact Indicators: Favorite Star (only when ON) + Open Dot -->
+            <div class="box-bottom-indicators">
+              <i *ngIf="favoriteTables.has(tbl.table)"
+                 class="pi pi-star-fill box-fav-mini"
+                 title="Favorite startup sheet"></i>
+              <span *ngIf="isTableOpen(tbl.table)" class="box-dot-inline" title="Sheet open"></span>
+            </div>
           </div>
         </div>
       </div>
@@ -1387,12 +1396,43 @@
 
   </div>
 
-  <!-- Dynamic Table Designer Dialog (Native in Excel UI) -->
+  <!-- Compact Table Action Popover Menu (Option A: Edit, Favorite, Delete) -->
+  <div *ngIf="tableActionMenu.visible"
+       class="studio-table-action-menu"
+       [style.left.px]="tableActionMenu.x"
+       [style.top.px]="tableActionMenu.y"
+       (click)="$event.stopPropagation()">
+    <button *ngIf="isAdmin"
+            type="button"
+            class="table-act-item"
+            (click)="openEditTable(tableActionMenu.table)">
+      <i class="pi pi-pencil text-primary"></i>
+      <span>Edit Table</span>
+    </button>
+    <button type="button"
+            class="table-act-item"
+            (click)="toggleFavoriteTable(tableActionMenu.table, $event); closeTableActionMenu()">
+      <i class="pi" [ngClass]="favoriteTables.has(tableActionMenu.table) ? 'pi-star text-warning' : 'pi-star-fill text-warning'"></i>
+      <span>{{ favoriteTables.has(tableActionMenu.table) ? 'Remove Favorite' : 'Add to Favorites' }}</span>
+    </button>
+    <div *ngIf="isAdmin" class="table-act-divider"></div>
+    <button *ngIf="isAdmin"
+            type="button"
+            class="table-act-item danger"
+            (click)="confirmDeleteTable(tableActionMenu.table, tableActionMenu.displayName)">
+      <i class="pi pi-trash"></i>
+      <span>Delete Table</span>
+    </button>
+  </div>
+
+  <!-- Dynamic Table Designer Dialog (Create & Edit Mode) -->
   <sutram-table-designer-dialog
     [(visible)]="showTableDesignerModal"
+    [editTableName]="editTableName"
     [isDarkMode]="isDarkMode"
     [apiBase]="apiBase"
-    (tableCreated)="onTableCreated($event)">
+    (tableCreated)="onTableCreated($event)"
+    (tableUpdated)="onTableUpdated($event)">
   </sutram-table-designer-dialog>
 
   <!-- AI Vision OCR Modal Dialog (Opens in a Dedicated Modal, Creates New Sheet) -->

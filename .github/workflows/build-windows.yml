@@ -1,13 +1,25 @@
-name: Build Windows Desktop Shell (.exe)
+name: Build Windows Desktop Releases (Portable EXE + Full Installer)
 
-# Triggers ONLY when Tauri Rust shell (src-tauri/) changes, OR manually via "Run workflow" button.
-# Regular backend / UI updates use in-app update.zip and do NOT require rebuilding the .exe!
+# Triggers ONLY when Tauri Rust shell (src-tauri/) or Windows Installer (installer/) changes,
+# OR manually via Actions -> "Run workflow" with build_mode selection!
 on:
   workflow_dispatch:
+    inputs:
+      build_mode:
+        description: 'Which Windows release package(s) to build?'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - portable-exe
+          - installer
+          - portable-full-zip
   push:
     branches: [ main ]
     paths:
       - 'src-tauri/**'
+      - 'installer/**'
 
 jobs:
   build-windows:
@@ -17,7 +29,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js 20 LTS
         uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -25,7 +37,17 @@ jobs:
       - name: Setup Rust stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install root dependencies (Tauri CLI + Server deps)
+      - name: Ensure Inno Setup 6 is available (for Full Installer builds)
+        if: ${{ (github.event.inputs.build_mode || 'both') == 'both' || github.event.inputs.build_mode == 'installer' }}
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe") -and -not (Get-Command ISCC.exe -ErrorAction SilentlyContinue)) {
+            choco install innosetup -y --no-progress
+          } else {
+            Write-Host "Inno Setup 6 already installed."
+          }
+
+      - name: Install root dependencies (Tauri CLI + Server deps + better-sqlite3)
         run: npm install --legacy-peer-deps
 
       - name: Build Angular UI into sutram/dist
@@ -37,23 +59,38 @@ jobs:
           CI: true
           NG_CLI_ANALYTICS: false
 
-      - name: Build Tauri Windows .exe & Installer
-        run: npx tauri build
+      - name: Build Direct Portable Windows Launcher (Sutram.exe)
+        run: node scripts/build-portable.js
 
-      - name: Prepare Portable Windows Bundle
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path release-win | Out-Null
-          Copy-Item "src-tauri/target/release/sutram-desktop.exe" "release-win/Sutram.exe"
-          if (Test-Path "src-tauri/target/release/bundle/nsis") {
-            Copy-Item "src-tauri/target/release/bundle/nsis/*.exe" "release-win/" -ErrorAction SilentlyContinue
-          }
-          if (Test-Path "src-tauri/target/release/bundle/msi") {
-            Copy-Item "src-tauri/target/release/bundle/msi/*.msi" "release-win/" -ErrorAction SilentlyContinue
-          }
+      - name: Stage Full Bundle (exe + dist + server + packages + node_modules + Node 20 runtime)
+        if: ${{ (github.event.inputs.build_mode || 'both') != 'portable-exe' }}
+        run: node scripts/prepare-bundle.js --skip-ui --skip-tauri
 
-      - name: Upload Windows EXE Artifacts
+      - name: Build Full Installable Windows Setup Wizard (Sutram-Setup.exe)
+        if: ${{ (github.event.inputs.build_mode || 'both') == 'both' || github.event.inputs.build_mode == 'installer' }}
+        run: node scripts/build-installer.js
+
+      - name: Build Full Self-Contained Portable ZIP (optional pendrive mode)
+        if: ${{ github.event.inputs.build_mode == 'portable-full-zip' }}
+        run: node scripts/build-portable.js --full
+
+      - name: Upload Direct Portable Launcher (Sutram.exe)
+        if: ${{ (github.event.inputs.build_mode || 'both') == 'both' || github.event.inputs.build_mode == 'portable-exe' }}
         uses: actions/upload-artifact@v4
         with:
-          name: sutram-windows-exe
-          path: release-win/
+          name: sutram-windows-portable-exe
+          path: releases/Sutram.exe
+
+      - name: Upload Windows Full Setup Installer (Sutram-Setup.exe)
+        if: ${{ (github.event.inputs.build_mode || 'both') == 'both' || github.event.inputs.build_mode == 'installer' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sutram-windows-full-installer
+          path: releases/Sutram-Setup-*.exe
+
+      - name: Upload Full Portable ZIP
+        if: ${{ github.event.inputs.build_mode == 'portable-full-zip' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sutram-windows-portable-full-zip
+          path: releases/Sutram-Portable-Full-*.zip

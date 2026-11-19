@@ -1,4 +1,4 @@
-import { Component, Input, Output, EventEmitter, OnInit, ChangeDetectorRef, Optional } from '@angular/core';
+import { Component, Input, Output, EventEmitter, OnInit, OnChanges, SimpleChanges, ChangeDetectorRef, Optional } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { SchemaHeuristicsUtil } from '../../../utils/schema-heuristics';
 import { SutramExcelApiService } from '../../../services/sutram-excel-api.service';
@@ -20,6 +20,7 @@ export interface TableCatalogItem {
 
 export interface DesignerColumnRow {
   name: string;
+  original_name?: string;
   label: string;
   sql_type: string;
   col_type: string;
@@ -44,7 +45,7 @@ export interface DesignerColumnRow {
   templateUrl: './table-designer-dialog.component.html',
   styleUrls: ['./table-designer-dialog.component.scss']
 })
-export class TableDesignerDialogComponent implements OnInit {
+export class TableDesignerDialogComponent implements OnInit, OnChanges {
   private _visible: boolean = false;
 
   @Input()
@@ -53,16 +54,15 @@ export class TableDesignerDialogComponent implements OnInit {
   }
   public set visible(val: boolean) {
     this._visible = val;
-    if (val) {
-      this.initDesigner();
-    }
   }
 
   @Input() public isDarkMode: boolean = false;
   @Input() public apiBase: string = '/_sutram/excel';
+  @Input() public editTableName: string | null = null;
 
   @Output() public visibleChange = new EventEmitter<boolean>();
   @Output() public tableCreated = new EventEmitter<string>();
+  @Output() public tableUpdated = new EventEmitter<string>();
 
   public newTableName: string = '';
   public newTableLabel: string = '';
@@ -70,7 +70,14 @@ export class TableDesignerDialogComponent implements OnInit {
   public showSqlPreview: boolean = false;
   public liveSqlPreview: string = '';
   public isCreatingTable: boolean = false;
+  public isLoadingEdit: boolean = false;
+  public existingRowCount: number = 0;
+  public originalColumnNames: string[] = [];
   public catalog: TableCatalogItem[] = [];
+
+  public get isEditMode(): boolean {
+    return !!this.editTableName;
+  }
 
   public sqlTypes: Array<{ label: string; value: string; hint: string }> = [
     { label: 'VARCHAR', value: 'VARCHAR', hint: 'Short string up to 255 chars' },
@@ -111,7 +118,16 @@ export class TableDesignerDialogComponent implements OnInit {
   ) {}
 
   ngOnInit(): void {
-    if (this._visible) {
+    if (this._visible && this.designerColumns.length === 0 && !this.isLoadingEdit) {
+      this.initDesigner();
+    }
+  }
+
+  ngOnChanges(changes: SimpleChanges): void {
+    // Runs AFTER all @Input() bindings (both visible AND editTableName) are applied together
+    const becameVisible = !!(changes['visible'] && changes['visible'].currentValue === true && !changes['visible'].previousValue);
+    const targetChangedWhileOpen = !!(this._visible && changes['editTableName'] && changes['editTableName'].currentValue !== changes['editTableName'].previousValue);
+    if (becameVisible || targetChangedWhileOpen) {
       this.initDesigner();
     }
   }
@@ -121,10 +137,18 @@ export class TableDesignerDialogComponent implements OnInit {
     this.newTableLabel = '';
     this.newTableDesc = '';
     this.showSqlPreview = false;
+    this.existingRowCount = 0;
+    this.originalColumnNames = [];
     this.loadCatalog();
+
+    if (this.editTableName) {
+      this.loadTableForEdit(this.editTableName);
+      return;
+    }
 
     const pkRow: DesignerColumnRow = {
       name: '_id',
+      original_name: '_id',
       label: 'ID (Primary Key)',
       sql_type: 'INTEGER',
       col_type: 'number',
@@ -157,7 +181,7 @@ export class TableDesignerDialogComponent implements OnInit {
       ref_table: '',
       ref_col: '_id',
       ref_select: [],
-      on_delete: 'NO ACTION',
+      on_delete: 'RESTRICT',
       user_touched_type: false
     };
 
@@ -166,8 +190,130 @@ export class TableDesignerDialogComponent implements OnInit {
     this.cdr.markForCheck();
   }
 
+  private mapBackendColumnToDesignerRow(c: any): DesignerColumnRow {
+    const rawSql = String(c.sql_type || '').toUpperCase();
+    const colType = String(c.col_type || 'string').toLowerCase();
+    let sqlType = 'VARCHAR';
+    let lenPrec = '';
+
+    if (c.is_pk || c.column_name === '_id') {
+      sqlType = 'INTEGER';
+    } else if (c.ref_table) {
+      sqlType = 'FK';
+    } else if (colType === 'date' || rawSql === 'DATE') {
+      sqlType = 'DATE';
+    } else if (colType === 'datetime' || rawSql === 'DATETIME') {
+      sqlType = 'DATETIME';
+    } else if (colType === 'password' || rawSql === 'PASSWORD') {
+      sqlType = 'PASSWORD';
+    } else if (colType === 'boolean' || rawSql.includes('BOOL') || rawSql === 'TINYINT') {
+      sqlType = 'BOOLEAN';
+    } else if (colType === 'json' || rawSql === 'JSON') {
+      sqlType = 'JSON';
+    } else if (rawSql.startsWith('DECIMAL') || rawSql.startsWith('NUMERIC') || rawSql.startsWith('FLOAT')) {
+      sqlType = 'DECIMAL';
+      const m = rawSql.match(/\(([^)]+)\)/);
+      lenPrec = m ? m[1] : '12,2';
+    } else if (rawSql.startsWith('BIGINT')) {
+      sqlType = 'BIGINT';
+    } else if (colType === 'number' || rawSql.startsWith('INT')) {
+      sqlType = rawSql.startsWith('INT') ? 'INT' : 'DECIMAL';
+    } else if (rawSql === 'TEXT') {
+      sqlType = 'TEXT';
+    } else {
+      sqlType = 'VARCHAR';
+      const m = rawSql.match(/\(([^)]+)\)/);
+      lenPrec = m ? m[1] : '255';
+    }
+
+    let defaultType: 'NONE' | 'NULL' | 'CURRENT_TIMESTAMP' | 'CUSTOM' = 'NONE';
+    let defaultVal = '';
+    if (c.default_value !== null && c.default_value !== undefined && String(c.default_value).trim() !== '') {
+      const dvStr = String(c.default_value).trim();
+      if (dvStr.toUpperCase().includes('CURRENT_TIMESTAMP') || dvStr.toLowerCase().includes("datetime('now'")) {
+        defaultType = 'CURRENT_TIMESTAMP';
+      } else if (dvStr.toUpperCase() === 'NULL') {
+        defaultType = 'NULL';
+      } else {
+        defaultType = 'CUSTOM';
+        defaultVal = dvStr.replace(/^'|'$/g, '');
+      }
+    }
+
+    return {
+      name: c.column_name,
+      original_name: c.column_name,
+      label: c.label || c.column_name,
+      sql_type: sqlType,
+      col_type: colType,
+      length_precision: lenPrec,
+      is_pk: !!(c.is_pk || c.column_name === '_id'),
+      is_required: !!c.is_required,
+      is_unique: !!c.is_unique,
+      has_index: !!c.has_index,
+      default_type: defaultType,
+      default_value: defaultVal,
+      ref_table: c.ref_table || '',
+      ref_col: c.ref_col || '_id',
+      ref_select: Array.isArray(c.ref_select) ? c.ref_select : [],
+      on_delete: 'RESTRICT',
+      user_touched_type: true
+    };
+  }
+
+  public loadTableForEdit(tableName: string): void {
+    this.isLoadingEdit = true;
+    const url = this.api
+      ? this.api.buildApiUrl(`/api/_sutram/schema/table-detail/${encodeURIComponent(tableName)}`)
+      : `/api/_sutram/schema/table-detail/${encodeURIComponent(tableName)}`;
+
+    this.http.get<{ success: boolean; result?: any; error?: string }>(url).subscribe({
+      next: (res) => {
+        this.isLoadingEdit = false;
+        if (res && res.success && res.result) {
+          const d = res.result;
+          this.newTableName = d.table_name;
+          this.newTableLabel = d.display_name || d.label || d.table_name;
+          this.newTableDesc = d.description || '';
+          this.existingRowCount = d.rowCount || 0;
+
+          const cols = (d.columns || []).filter((c: any) => c.column_name !== 'hl' && c.column_name !== 'created_at' && c.column_name !== 'updated_at');
+          this.originalColumnNames = cols.filter((c: any) => !c.is_pk && c.column_name !== '_id').map((c: any) => c.column_name);
+          this.designerColumns = cols.map((c: any) => this.mapBackendColumnToDesignerRow(c));
+
+          // Hydrate FK candidate dropdowns once catalog is ready
+          setTimeout(() => {
+            for (const col of this.designerColumns) {
+              if (col.sql_type === 'FK' && col.ref_table) {
+                const savedSelect = [...(col.ref_select || [])];
+                this.onForeignKeyTableChange(col);
+                if (savedSelect.length > 0) col.ref_select = savedSelect;
+              }
+            }
+            this.updateLiveSql();
+            this.cdr.markForCheck();
+          }, 150);
+
+          this.updateLiveSql();
+        } else {
+          alert('Error loading table schema: ' + (res?.error || 'Unknown error'));
+          this.close();
+        }
+        this.cdr.markForCheck();
+      },
+      error: (err) => {
+        this.isLoadingEdit = false;
+        alert('Error loading table schema: ' + (err?.error?.error || err?.message || 'Server error'));
+        this.close();
+        this.cdr.markForCheck();
+      }
+    });
+  }
+
   public close(): void {
     this._visible = false;
+    this.isLoadingEdit = false;
+    this.designerColumns = [];
     this.visibleChange.emit(false);
     this.cdr.markForCheck();
   }
@@ -230,7 +376,7 @@ export class TableDesignerDialogComponent implements OnInit {
       ref_table: '',
       ref_col: '_id',
       ref_select: [],
-      on_delete: 'NO ACTION',
+      on_delete: 'RESTRICT',
       user_touched_type: false
     });
     this.updateLiveSql();
@@ -294,10 +440,12 @@ export class TableDesignerDialogComponent implements OnInit {
     col.user_touched_type = true;
     if (col.sql_type === 'VARCHAR' && !col.length_precision) col.length_precision = '255';
     if (col.sql_type === 'DECIMAL' && !col.length_precision) col.length_precision = '12,2';
-    if (['INT', 'BIGINT'].includes(col.sql_type)) col.col_type = 'number';
-    if (['VARCHAR', 'TEXT'].includes(col.sql_type)) col.col_type = 'string';
+    if (['INT', 'BIGINT', 'DECIMAL'].includes(col.sql_type)) col.col_type = 'number';
+    if (['VARCHAR', 'TEXT', 'ENUM', 'TIME'].includes(col.sql_type)) col.col_type = 'string';
     if (col.sql_type === 'BOOLEAN') col.col_type = 'boolean';
-    if (['DATE', 'DATETIME', 'TIME'].includes(col.sql_type)) col.col_type = 'string';
+    if (col.sql_type === 'DATE') col.col_type = 'date';
+    if (col.sql_type === 'DATETIME') col.col_type = 'datetime';
+    if (col.sql_type === 'PASSWORD') col.col_type = 'password';
     if (col.sql_type === 'JSON') col.col_type = 'json';
 
     if (col.sql_type === 'FK') {
@@ -487,16 +635,28 @@ export class TableDesignerDialogComponent implements OnInit {
   }
 
   public submitCreateTable(): void {
-    const rawName = SchemaHeuristicsUtil.sanitizeIdentifier(this.newTableName);
+    const rawName = this.isEditMode
+      ? this.editTableName!
+      : SchemaHeuristicsUtil.sanitizeIdentifier(this.newTableName);
     if (!rawName) {
-      alert('कृपया तालिका का वैध नाम दर्ज करें (Please provide a valid table name)');
+      alert('Please provide a valid table name');
       return;
     }
 
     const validCols = this.designerColumns.filter(c => c.is_pk || SchemaHeuristicsUtil.sanitizeIdentifier(c.name));
     if (validCols.length <= 1) {
-      alert('कम से कम एक कॉलम जोड़ना अनिवार्य है (Please add at least 1 custom column)');
+      alert('Please add at least 1 custom column');
       return;
+    }
+
+    // Warn user before permanently dropping existing columns in Edit Mode
+    if (this.isEditMode && this.originalColumnNames.length > 0) {
+      const keptOriginals = new Set(validCols.map(c => c.original_name || c.name));
+      const dropped = this.originalColumnNames.filter(n => !keptOriginals.has(n));
+      if (dropped.length > 0) {
+        const msg = `⚠️ Warning: You are removing ${dropped.length} column(s) (${dropped.join(', ')}) from "${rawName}" (${this.existingRowCount} row(s)). Data in removed columns will be permanently deleted.\n\nContinue saving changes?`;
+        if (!window.confirm(msg)) return;
+      }
     }
 
     const payload = {
@@ -504,7 +664,8 @@ export class TableDesignerDialogComponent implements OnInit {
       label: this.newTableLabel || rawName,
       description: this.newTableDesc || null,
       columns: validCols.map(c => ({
-        column_name: c.name,
+        column_name: SchemaHeuristicsUtil.sanitizeIdentifier(c.name) || c.name,
+        original_name: c.original_name || null,
         label: c.label || c.name,
         col_type: c.col_type,
         sql_type: c.sql_type,
@@ -514,33 +675,58 @@ export class TableDesignerDialogComponent implements OnInit {
         is_unique: c.is_unique ? 1 : 0,
         has_index: c.has_index ? 1 : 0,
         default_type: c.default_type,
-        default_value: c.default_value,
+        default_value: c.default_type === 'CUSTOM'
+          ? c.default_value
+          : (c.default_type === 'CURRENT_TIMESTAMP' ? "datetime('now', 'localtime')" : null),
         ref_table: c.sql_type === 'FK' ? c.ref_table : null,
         ref_col: c.sql_type === 'FK' ? (c.ref_col || '_id') : null,
         ref_select: c.sql_type === 'FK' ? c.ref_select : null,
-        on_delete: c.sql_type === 'FK' ? c.on_delete : null
+        on_delete: c.sql_type === 'FK' ? (c.on_delete || 'RESTRICT') : null
       }))
     };
 
     this.isCreatingTable = true;
-    const url = this.api ? this.api.buildApiUrl('/api/_sutram/schema/create-table') : '/api/_sutram/schema/create-table';
-    this.http.post<{ success: boolean; error?: string; message?: string }>(url, payload).subscribe({
-      next: (res) => {
-        this.isCreatingTable = false;
-        if (res && res.success) {
-          this.close();
-          this.tableCreated.emit(rawName);
-        } else {
-          alert('त्रुटि: ' + (res?.error || 'टेबल नहीं बनाई जा सकी'));
+    if (this.isEditMode) {
+      const url = this.api
+        ? this.api.buildApiUrl(`/api/_sutram/schema/tables/${encodeURIComponent(rawName)}`)
+        : `/api/_sutram/schema/tables/${encodeURIComponent(rawName)}`;
+      this.http.put<{ success: boolean; error?: string; message?: string }>(url, payload).subscribe({
+        next: (res) => {
+          this.isCreatingTable = false;
+          if (res && res.success) {
+            this.close();
+            this.tableUpdated.emit(rawName);
+          } else {
+            alert('Error: ' + (res?.error || 'Could not update table'));
+          }
+          this.cdr.markForCheck();
+        },
+        error: (err) => {
+          this.isCreatingTable = false;
+          alert('Error: ' + (err?.error?.error || err?.message || 'Server error'));
+          this.cdr.markForCheck();
         }
-        this.cdr.markForCheck();
-      },
-      error: (err) => {
-        this.isCreatingTable = false;
-        alert('त्रुटि: ' + (err?.error?.error || err?.message || 'Server error'));
-        this.cdr.markForCheck();
-      }
-    });
+      });
+    } else {
+      const url = this.api ? this.api.buildApiUrl('/api/_sutram/schema/create-table') : '/api/_sutram/schema/create-table';
+      this.http.post<{ success: boolean; error?: string; message?: string }>(url, payload).subscribe({
+        next: (res) => {
+          this.isCreatingTable = false;
+          if (res && res.success) {
+            this.close();
+            this.tableCreated.emit(rawName);
+          } else {
+            alert('Error: ' + (res?.error || 'Could not create table'));
+          }
+          this.cdr.markForCheck();
+        },
+        error: (err) => {
+          this.isCreatingTable = false;
+          alert('Error: ' + (err?.error?.error || err?.message || 'Server error'));
+          this.cdr.markForCheck();
+        }
+      });
+    }
   }
 }
 

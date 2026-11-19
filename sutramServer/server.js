@@ -432,6 +432,126 @@ schemaRouter.post('/create-table', (req, res) => {
 });
 
 /**
+ * GET /api/_sutram/schema/table-detail/:tableName
+ * Returns full table schema, columns, row count, and incoming FK references for Edit/Delete
+ */
+schemaRouter.get('/table-detail/:tableName', (req, res) => {
+  try {
+    const { engine } = getActiveProject(req);
+    const tableName = req.params.tableName;
+    const detail = engine.schema.getTableDetail(tableName);
+    const impact = engine.schema.getTableImpact(tableName);
+    const ui = (engine.ui && engine.ui.getTableSchema) ? engine.ui.getTableSchema(tableName) : null;
+
+    // Enrich columns with physical PRAGMA table_info (exact SQL type, notnull, default)
+    const db = engine.db.db || engine.db;
+    const pragmaCols = db.prepare(`PRAGMA table_info("${tableName}")`).all();
+    const pragmaMap = new Map(pragmaCols.map(p => [p.name, p]));
+    const pragmaIndexes = db.prepare(`PRAGMA index_list("${tableName}")`).all();
+    const uniqueCols = new Set();
+    const indexedCols = new Set();
+    for (const idx of pragmaIndexes) {
+      const info = db.prepare(`PRAGMA index_info("${idx.name}")`).all();
+      for (const ic of info) {
+        indexedCols.add(ic.name);
+        if (idx.unique) uniqueCols.add(ic.name);
+      }
+    }
+
+    const enrichedColumns = (detail.columns || []).map(c => {
+      const pInfo = pragmaMap.get(c.column_name);
+      let refSelect = [];
+      if (c.ref_select) {
+        try {
+          const parsed = JSON.parse(c.ref_select);
+          refSelect = Array.isArray(parsed) ? parsed : [String(parsed)];
+        } catch {
+          refSelect = String(c.ref_select).split(',').map(s => s.trim()).filter(Boolean);
+        }
+      }
+      return {
+        ...c,
+        sql_type: pInfo?.type || '',
+        is_unique: uniqueCols.has(c.column_name) ? 1 : 0,
+        has_index: indexedCols.has(c.column_name) ? 1 : 0,
+        ref_select: refSelect
+      };
+    });
+
+    res.json({
+      success: true,
+      result: {
+        ...detail,
+        display_name: ui?.display_name || detail.label || tableName,
+        columns: enrichedColumns,
+        rowCount: impact.rowCount,
+        referencingTables: impact.referencingTables
+      }
+    });
+  } catch (err) {
+    console.error('[sutramServer] table-detail error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * PUT /api/_sutram/schema/tables/:tableName
+ * Updates an existing table using 2-Tier Hybrid Strategy (Fast In-Place or Atomic Shadow Rebuild)
+ */
+schemaRouter.put('/tables/:tableName', (req, res) => {
+  try {
+    const { engine, excel } = getActiveProject(req);
+    const tableName = req.params.tableName;
+    const { label, description, columns } = req.body;
+
+    console.log(`[sutramServer] Updating table "${tableName}"...`);
+    const result = engine.schema.updateTable(tableName, { label, description, columns });
+
+    if (label) {
+      try {
+        engine.ui.setTableUi(tableName, { display_name: label, icon: 'pi pi-table' });
+      } catch (e) {
+        console.warn('[sutramServer] Notice: UiManager setTableUi warning:', e.message);
+      }
+    }
+
+    projectManager._syncExcelRegistrations(engine, excel, true);
+
+    res.json({
+      success: true,
+      message: `Table "${tableName}" updated successfully (${result.strategy}).`,
+      result
+    });
+  } catch (err) {
+    console.error('[sutramServer] update table error:', err);
+    res.status(err.statusCode || 500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * DELETE /api/_sutram/schema/tables/:tableName
+ * Safely drops a user table and cleans up metadata & Excel registration
+ */
+schemaRouter.delete('/tables/:tableName', (req, res) => {
+  try {
+    const { engine, excel } = getActiveProject(req);
+    const tableName = req.params.tableName;
+
+    console.log(`[sutramServer] Dropping table "${tableName}"...`);
+    engine.schema.dropTable(tableName);
+    projectManager._syncExcelRegistrations(engine, excel, true);
+
+    res.json({
+      success: true,
+      message: `Table "${tableName}" deleted successfully.`
+    });
+  } catch (err) {
+    console.error('[sutramServer] delete table error:', err);
+    res.status(err.statusCode || 500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * GET /api/_sutram/schema/tables
  * Returns all active user tables for the active project
  */

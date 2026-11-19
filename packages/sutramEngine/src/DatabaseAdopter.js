@@ -161,12 +161,9 @@ class DatabaseAdopter {
           const isRequired = (col.notnull === 1 && !isPk) ? 1 : (inferred.is_required ? 1 : 0);
           const defaultValue = col.dflt_value !== null ? String(col.dflt_value) : null;
 
-          // Normalize col_type strictly to ('number','string','boolean','json')
-          let colType = inferred.col_type;
-          if (colType === 'date' || colType === 'datetime') {
-            colType = 'string';
-          }
-          if (!['number', 'string', 'boolean', 'json'].includes(colType)) {
+          // Normalize col_type strictly to allowed sutramEngine types
+          let colType = String(inferred.col_type || 'string').toLowerCase();
+          if (!['number', 'string', 'boolean', 'json', 'date', 'datetime', 'password'].includes(colType)) {
             colType = 'string';
           }
 

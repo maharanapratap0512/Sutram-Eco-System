@@ -5,7 +5,7 @@
   [dismissableMask]="true"
   [resizable]="false"
   [draggable]="false"
-  [style]="{ width: '750px', maxWidth: '96vw' }"
+  [style]="{ width: '740px', maxWidth: '96vw' }"
   styleClass="app-updater-dialog"
   (onHide)="close()">
 
@@ -15,8 +15,8 @@
         <i class="pi pi-sync"></i>
       </div>
       <div class="header-text">
-        <h3 class="header-title">सूत्रम् अपडेट मैनेजर (Sutram Safe App Updater)</h3>
-        <p class="header-desc">ऑफ़लाइन ज़िप अपडेट स्थापित करें या पूर्व स्थिति पर रोलबैक करें</p>
+        <h3 class="header-title">Sutram Safe App Updater</h3>
+        <p class="header-desc">Install offline ZIP updates or restore a previous backup snapshot</p>
       </div>
     </div>
   </ng-template>
@@ -30,7 +30,7 @@
         [class.active]="activeTab === 'update'"
         (click)="onTabChange('update')">
         <i class="pi pi-cloud-upload me-2"></i>
-        <span>सॉफ़्टवेयर अपडेट (Apply Update)</span>
+        <span>Apply Update</span>
       </button>
 
       <button
@@ -39,7 +39,7 @@
         [class.active]="activeTab === 'backups'"
         (click)="onTabChange('backups')">
         <i class="pi pi-history me-2"></i>
-        <span>सुरक्षित बैकअप व रोलबैक (Backups & Rollback)</span>
+        <span>Backups & Rollback</span>
         <span class="badge ms-2" *ngIf="backups.length > 0">{{ backups.length }}</span>
       </button>
     </div>
@@ -50,8 +50,8 @@
       <div class="safe-banner">
         <i class="pi pi-shield safe-icon"></i>
         <div class="safe-text">
-          <strong>डेटा सुरक्षा गारंटी (Zero Data Loss):</strong>
-          <span> आपका डेटाबेस फोल्डर (<code>./data/</code>) हमेशा सुरक्षित रहेगा। अपडेट लागू करने से ठीक पहले वर्तमान सर्वर व यूआई का स्वचालित बैकअप लिया जाता है।</span>
+          <strong>Zero Data Loss Guarantee:</strong>
+          <span> Your external database folder (<code>SutramData/</code>) is never touched. An automatic snapshot backup of the current server & UI is created before applying any update.</span>
         </div>
       </div>
 
@@ -64,9 +64,9 @@
           (change)="onFileSelected($event)"
           class="file-input-hidden" />
         <label for="zipInput" class="dropzone-label">
-          <i class="pi pi-file-excel drop-icon"></i>
-          <span class="drop-title">अपडेट ZIP फ़ाइल चुनें (Choose update.zip)</span>
-          <span class="drop-hint">फ़ाइल को यहाँ ड्रैग करें या क्लिक करके चुनें (.zip)</span>
+          <i class="pi pi-file drop-icon"></i>
+          <span class="drop-title">Choose Update ZIP File (update.zip)</span>
+          <span class="drop-hint">Click to browse and select a .zip release archive</span>
         </label>
       </div>
 
@@ -83,7 +83,7 @@
           type="button"
           class="btn-remove"
           (click)="removeSelectedFile()"
-          title="फ़ाइल हटाएं">
+          title="Remove file">
           ✕
         </button>
       </div>
@@ -91,8 +91,8 @@
       <!-- Applying Progress -->
       <div class="applying-box" *ngIf="isApplyingUpdate">
         <i class="pi pi-spin pi-spinner spin-lg"></i>
-        <h4>अपडेट सुरक्षित रूप से स्थापित हो रहा है...</h4>
-        <p>1. बैकअप स्नैपशॉट बनाया जा रहा है &nbsp;➔&nbsp; 2. नई फाइलों को सत्यापित व बदला जा रहा है...</p>
+        <h4>Applying Update Safely...</h4>
+        <p>1. Creating backup snapshot &nbsp;→&nbsp; 2. Extracting & replacing server/dist files...</p>
       </div>
 
       <!-- Success Result Box -->
@@ -100,12 +100,12 @@
         <div class="success-icon-box">
           <i class="pi pi-check-circle"></i>
         </div>
-        <h4>सॉफ़्टवेयर सफलतापूर्वक अपडेट हो गया!</h4>
+        <h4>Software Updated Successfully!</h4>
         <p class="sub">{{ updateResult.message }}</p>
 
         <div class="result-details" *ngIf="updateResult.backupId">
-          <span>सुरक्षा बैकअप स्नैपशॉट ID: <code>{{ updateResult.backupId }}</code></span>
-          <span *ngIf="updateResult.updatedFolders">अपडेट किए गए फोल्डर: <strong>{{ updateResult.updatedFolders.join(', ') }}</strong></span>
+          <span>Backup Snapshot ID: <code>{{ updateResult.backupId }}</code></span>
+          <span *ngIf="updateResult.updatedFolders">Updated Folders: <strong>{{ updateResult.updatedFolders.join(', ') }}</strong></span>
         </div>
 
         <div class="reload-prompt">
@@ -115,7 +115,7 @@
             class="p-button-sm p-button-success"
             (click)="reloadApp()"
             icon="pi pi-refresh"
-            label="एप्लिकेशन रीलोड करें (Reload App)">
+            label="Reload Application">
           </button>
         </div>
       </div>
@@ -133,7 +133,7 @@
           type="button"
           class="p-button-sm p-button-secondary p-button-text"
           (click)="removeSelectedFile()"
-          label="रद्द करें">
+          label="Cancel">
         </button>
         <button
           pButton
@@ -141,7 +141,7 @@
           class="p-button-sm p-button-primary"
           (click)="applyUpdate()"
           icon="pi pi-check"
-          label="अपडेट स्थापित करें (Apply Update)">
+          label="Apply Update">
         </button>
       </div>
     </div>
@@ -149,7 +149,7 @@
     <!-- ── TAB 2: BACKUPS & ROLLBACK ─────────────────────────────── -->
     <div class="tab-content" *ngIf="activeTab === 'backups'">
       <div class="backups-header">
-        <span class="sub-title">सहेजे गए बैकअप स्नैपशॉट (Restore Points)</span>
+        <span class="sub-title">Saved Restore Points</span>
         <button
           pButton
           type="button"
@@ -157,7 +157,7 @@
           (click)="loadBackups()"
           [loading]="isLoadingBackups"
           icon="pi pi-refresh"
-          label="रीफ़्रेश">
+          label="Refresh">
         </button>
       </div>
 
@@ -172,10 +172,10 @@
       <!-- Empty State -->
       <div class="empty-backups" *ngIf="backups.length === 0 && !isLoadingBackups">
         <i class="pi pi-folder-open empty-icon"></i>
-        <p>अभी तक कोई बैकअप स्नैपशॉट उपलब्ध नहीं है। जब भी आप अपडेट करेंगे, यहाँ बैकअप स्वचालित रूप से दिखेगा।</p>
+        <p>No backup snapshots yet. Automatic restore points are created before every update.</p>
       </div>
 
-      <!-- Backups Table -->
+      <!-- Backups List -->
       <div class="backups-list" *ngIf="backups.length > 0">
         <div class="backup-row" *ngFor="let b of backups">
           <div class="b-meta">
@@ -185,7 +185,7 @@
 
           <div class="b-stats">
             <span class="b-size">{{ b.sizeFormatted }}</span>
-            <span class="b-items">{{ b.itemsCount }} फ़ोल्डर</span>
+            <span class="b-items">{{ b.itemsCount }} folders</span>
           </div>
 
           <div class="b-action">
@@ -196,7 +196,7 @@
               [disabled]="isRollingBack"
               (click)="rollbackToBackup(b)"
               icon="pi pi-history"
-              label="रोलबैक करें (Restore)">
+              label="Restore">
             </button>
           </div>
         </div>
@@ -211,7 +211,7 @@
         type="button"
         class="p-button-sm p-button-secondary p-button-text"
         (click)="close()"
-        label="बंद करें (Close)">
+        label="Close">
       </button>
     </div>
   </ng-template>

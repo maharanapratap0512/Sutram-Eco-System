@@ -192,7 +192,12 @@ class BaseTable {
                     val = (val !== null && val !== undefined && val !== '') ? Number(val) : null;
                     break;
                 case 'string':
-                    val = (val !== null && val !== undefined) ? String(val).trim() : null;
+                case 'date':
+                case 'datetime':
+                    val = (val !== null && val !== undefined && val !== '') ? String(val).trim() : null;
+                    break;
+                case 'password':
+                    val = (val !== null && val !== undefined) ? String(val) : null;
                     break;
             }
 
@@ -411,6 +416,7 @@ class BaseTable {
             if (!def.ref) continue;
 
             const [refTable, refCol] = def.ref.split('.');
+            if (!refTable || !this.schema[refTable]) continue;
             const alias = def.as ?? refTable;
 
             joinParts.push(

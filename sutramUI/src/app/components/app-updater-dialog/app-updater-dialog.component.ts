@@ -50,7 +50,7 @@ export class AppUpdaterDialogComponent implements OnInit {
     const file = event.target.files?.[0];
     if (file) {
       if (!file.name.toLowerCase().endsWith('.zip')) {
-        this.updateError = 'कृपया केवल मान्य .zip फ़ाइल चुनें (Only .zip update files allowed)';
+        this.updateError = 'Only valid .zip update files are allowed';
         this.selectedFile = null;
         return;
       }
@@ -80,12 +80,12 @@ export class AppUpdaterDialogComponent implements OnInit {
           this.selectedFile = null;
           this.loadBackups();
         } else {
-          this.updateError = res.error || 'अपडेट निष्पादन विफल रहा (Update failed)';
+          this.updateError = res.error || 'Update failed';
         }
       },
       error: (err) => {
         this.isApplyingUpdate = false;
-        this.updateError = err?.error?.error || err.message || 'नेटवर्क या सर्वर त्रुटि (Error applying update)';
+        this.updateError = err?.error?.error || err.message || 'Error applying update';
       }
     });
   }
@@ -100,15 +100,15 @@ export class AppUpdaterDialogComponent implements OnInit {
           this.backups = res.result;
         }
       },
-      error: (err) => {
+      error: () => {
         this.isLoadingBackups = false;
-        this.rollbackError = 'बैकअप सूची प्राप्त करने में त्रुटि (Failed to load backups)';
+        this.rollbackError = 'Failed to load backup snapshots';
       }
     });
   }
 
   public rollbackToBackup(backup: BackupItem): void {
-    const ok = window.confirm(`क्या आप सूत्रम् को "${backup.id}" पर रोलबैक (Restore) करना चाहते हैं?\n(आपका डेटा सुरक्षित रहेगा)`);
+    const ok = window.confirm(`Restore Sutram to backup "${backup.id}"?\n(Your database folder will remain untouched.)`);
     if (!ok) return;
 
     this.isRollingBack = true;
@@ -119,15 +119,15 @@ export class AppUpdaterDialogComponent implements OnInit {
       next: (res) => {
         this.isRollingBack = false;
         if (res.success) {
-          this.rollbackMessage = `सफलतापूर्वक बैकअप "${backup.id}" पुनर्स्थापित किया गया। ऐप को रीलोड करें।`;
+          this.rollbackMessage = `Successfully restored backup "${backup.id}". Reload the app to apply.`;
           this.loadBackups();
         } else {
-          this.rollbackError = res.error || 'रोलबैक विफल रहा (Rollback failed)';
+          this.rollbackError = res.error || 'Rollback failed';
         }
       },
       error: (err) => {
         this.isRollingBack = false;
-        this.rollbackError = err?.error?.error || err.message || 'त्रुटि (Rollback error)';
+        this.rollbackError = err?.error?.error || err.message || 'Rollback error';
       }
     });
   }

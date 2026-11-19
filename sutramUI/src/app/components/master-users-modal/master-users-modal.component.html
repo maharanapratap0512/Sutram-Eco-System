@@ -6,7 +6,7 @@
   [resizable]="false"
   [style]="{ width: '96vw', maxWidth: '1020px' }"
   styleClass="sutram-master-users-dialog"
-  header="कार्यक्षेत्र उपयोगकर्ता एवं प्रोजेक्ट अधिकार (Workspace Users & Access Control)"
+  header="Workspace Users & Access Control"
   (onHide)="close()">
 
   <div class="master-users-body">
@@ -16,7 +16,7 @@
         <i class="pi pi-user"></i>
       </div>
       <div class="user-bar-details">
-        <span class="bar-caption">वर्तमान सक्रिय यूज़र (Active Workspace Profile)</span>
+        <span class="bar-caption">Active Workspace Profile</span>
         <div class="bar-name-row">
           <span class="bar-name">{{ projectContext.activeMasterUser.display_name || projectContext.activeMasterUser.username }}</span>
           <span class="bar-login font-mono">@{{ projectContext.activeMasterUser.username }}</span>
@@ -31,7 +31,7 @@
     <div class="users-toolbar">
       <div class="toolbar-left">
         <i class="pi pi-users me-2 text-primary"></i>
-        <span class="toolbar-title">सिस्टम उपयोगकर्ता सूची (System Users)</span>
+        <span class="toolbar-title">System Users</span>
         <span class="user-count-badge ms-2">{{ masterUsers.length }}</span>
       </div>
 
@@ -40,7 +40,7 @@
         type="button"
         class="p-button-sm p-button-primary add-user-btn"
         icon="pi pi-plus"
-        label="नया यूज़र जोड़ें"
+        label="Add User"
         (click)="isAddingUser = !isAddingUser">
       </button>
     </div>
@@ -49,7 +49,7 @@
     <div class="add-user-panel" *ngIf="isAddingUser">
       <h4>
         <i class="pi pi-user-plus me-2 text-primary"></i>
-        नया सिस्टम यूज़र पंजीकृत करें (Register Workspace User)
+        Register Workspace User
       </h4>
 
       <div *ngIf="formError" class="error-msg">
@@ -59,22 +59,22 @@
 
       <div class="add-form-grid">
         <div class="form-group">
-          <label>यूज़रनेम (Username) *</label>
+          <label>Username *</label>
           <input type="text" pInputText class="p-inputtext-sm font-mono" [(ngModel)]="newUsername" placeholder="e.g. doctor_rajesh" />
         </div>
 
         <div class="form-group">
-          <label>प्रदर्शन नाम (Display Name)</label>
+          <label>Display Name</label>
           <input type="text" pInputText class="p-inputtext-sm" [(ngModel)]="newDisplayName" placeholder="e.g. Dr. Rajesh Sharma" />
         </div>
 
         <div class="form-group">
-          <label>पासवर्ड (Password) *</label>
+          <label>Password *</label>
           <input type="password" pInputText class="p-inputtext-sm" [(ngModel)]="newPassword" placeholder="••••••••" />
         </div>
 
         <div class="form-group">
-          <label>रोल (Master Role)</label>
+          <label>Master Role</label>
           <p-dropdown
             [options]="roleOptions"
             [(ngModel)]="newRole"
@@ -88,14 +88,14 @@
         <div class="form-group d-flex align-items-center mt-2" style="grid-column: span 2;">
           <label class="d-flex align-items-center gap-2 cursor-pointer mb-0">
             <p-checkbox [binary]="true" [(ngModel)]="newCanCreateProject"></p-checkbox>
-            <span style="font-size: 12px; font-weight: 600;">नया प्रोजेक्ट बनाने की अनुमति (Allow creating new projects)</span>
+            <span style="font-size: 12px; font-weight: 600;">Allow creating new projects</span>
           </label>
         </div>
       </div>
 
       <div class="panel-actions">
-        <button pButton type="button" label="रद्द करें" class="p-button-sm p-button-text" (click)="isAddingUser = false"></button>
-        <button pButton type="button" label="सेव करें (Save User)" class="p-button-sm p-button-success" (click)="submitNewUser()"></button>
+        <button pButton type="button" label="Cancel" class="p-button-sm p-button-text" (click)="isAddingUser = false"></button>
+        <button pButton type="button" label="Save User" class="p-button-sm p-button-success" (click)="submitNewUser()"></button>
       </div>
     </div>
 
@@ -106,10 +106,10 @@
         <table class="users-table">
           <thead>
             <tr>
-              <th style="width: 44%;">यूज़र</th>
-              <th style="width: 20%;">रोल</th>
-              <th style="width: 20%;">प्रोजेक्ट निर्माण</th>
-              <th style="width: 16%; text-align: center;">एक्शन</th>
+              <th style="width: 44%;">User</th>
+              <th style="width: 20%;">Role</th>
+              <th style="width: 20%;">Create Project</th>
+              <th style="width: 16%; text-align: center;">Action</th>
             </tr>
           </thead>
           <tbody>
@@ -138,20 +138,20 @@
                   [class.perm-enabled]="u.can_create_project === 1"
                   [class.perm-disabled]="u.can_create_project !== 1"
                   (click)="$event.stopPropagation(); toggleUserCanCreate(u)"
-                  [title]="u.can_create_project === 1 ? 'प्रोजेक्ट निर्माण सक्षम (क्लिक करके रोकें)' : 'प्रोजेक्ट निर्माण अक्षम (क्लिक करके अनुमति दें)'">
+                  [title]="u.can_create_project === 1 ? 'Allowed (click to disable)' : 'Restricted (click to allow)'">
                   <i class="pi" [ngClass]="u.can_create_project === 1 ? 'pi-check-circle' : 'pi-ban'"></i>
-                  <span>{{ u.can_create_project === 1 ? 'सक्षम' : 'रोक' }}</span>
+                  <span>{{ u.can_create_project === 1 ? 'Allowed' : 'Blocked' }}</span>
                 </button>
                 <span *ngIf="u.role === 'superadmin'" class="full-access-text">
-                  <i class="pi pi-shield"></i> पूर्ण अधिकार
+                  <i class="pi pi-shield"></i> Full Access
                 </span>
               </td>
               <td style="text-align: center;">
                 <span
                   class="active-user-badge"
                   *ngIf="projectContext.activeMasterUser?.username === u.username"
-                  title="वर्तमान सक्रिय यूज़र">
-                  <i class="pi pi-check"></i> सक्रिय
+                  title="Currently active user">
+                  <i class="pi pi-check"></i> Active
                 </span>
                 <button
                   *ngIf="projectContext.activeMasterUser?.username !== u.username"
@@ -159,9 +159,9 @@
                   type="button"
                   class="p-button-sm p-button-outlined p-button-secondary switch-btn"
                   icon="pi pi-sign-in"
-                  label="स्विच"
+                  label="Switch"
                   (click)="$event.stopPropagation(); switchToUser(u)"
-                  title="इस यूज़र में स्विच करें">
+                  title="Switch to this user">
                 </button>
               </td>
             </tr>
@@ -175,12 +175,12 @@
           <div class="title-wrap">
             <i class="pi pi-folder-open me-2 text-primary"></i>
             <span class="title">
-              प्रोजेक्ट एक्सेस: <strong>{{ selectedUser.display_name || selectedUser.username }}</strong>
+              Project Access: <strong>{{ selectedUser.display_name || selectedUser.username }}</strong>
             </span>
           </div>
 
           <span class="badge font-mono" *ngIf="selectedUser.role === 'superadmin' || selectedUser.username === 'admin'">
-            ✓ पूर्ण अधिकार (All Projects)
+            ✓ All Projects
           </span>
         </div>
 
@@ -191,8 +191,8 @@
               <i class="pi pi-shield"></i>
             </div>
             <div class="notice-text">
-              <strong>सुपरएडमिन विशेषाधिकार (Superadmin Privileges):</strong>
-              <span>इस यूज़र को कार्यक्षेत्र के सभी मौजूदा व नए प्रोजेक्ट्स का स्वतः पूर्ण एक्सेस प्राप्त है।</span>
+              <strong>Superadmin Privileges:</strong>
+              <span>This user automatically has full administrative access to all current and future workspace projects.</span>
             </div>
           </div>
 
@@ -204,7 +204,7 @@
                 <span class="proj-slug font-mono">({{ p.project_slug }}.db)</span>
               </div>
               <span class="super-access-pill">
-                <i class="pi pi-check-circle"></i> पूर्ण अधिकार
+                <i class="pi pi-check-circle"></i> Full Access
               </span>
             </div>
           </div>
@@ -214,7 +214,7 @@
         <div class="projects-access-list" *ngIf="selectedUser.role !== 'superadmin' && selectedUser.username !== 'admin'">
           <p class="access-sub">
             <i class="pi pi-info-circle me-1"></i>
-            नीचे दिए गए प्रोजेक्ट्स में से चयन करें जिन्हें यह यूज़र एक्सेस कर सकता है:
+            Select which projects this user is allowed to access:
           </p>
 
           <div class="project-access-item" *ngFor="let p of projects">
@@ -235,6 +235,6 @@
   </div>
 
   <ng-template pTemplate="footer">
-    <button pButton type="button" label="बंद करें" class="p-button-sm p-button-text" (click)="close()"></button>
+    <button pButton type="button" label="Close" class="p-button-sm p-button-text" (click)="close()"></button>
   </ng-template>
 </p-dialog>

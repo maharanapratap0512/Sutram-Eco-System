@@ -110,7 +110,7 @@ export class AppComponent implements OnInit {
 
     // Check if current studio has un-synced edits before switching
     if (this.isStudioMounted && this.studioComponent?.state?.pendingChangesCount() > 0) {
-      const confirmLeave = confirm('मौजूदा प्रोजेक्ट में अनसेव्ड डेटा मौजूद है। क्या आप दूसरे प्रोजेक्ट पर स्विच करना चाहते हैं? (Unsaved changes in active project will be lost. Switch anyway?)');
+      const confirmLeave = confirm('Unsaved changes in the active project will be lost. Switch project anyway?');
       if (!confirmLeave) return;
     }
 

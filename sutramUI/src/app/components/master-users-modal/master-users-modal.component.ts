@@ -40,9 +40,9 @@ export class MasterUsersModalComponent implements OnInit {
   public formError: string = '';
 
   public roleOptions = [
-    { label: 'Superadmin (सारे प्रोजेक्ट्स देख सकता है)', value: 'superadmin' },
-    { label: 'Admin (प्रोजेक्ट एडमिनिस्ट्रेटर)', value: 'admin' },
-    { label: 'Regular User (केवल अधिकृत प्रोजेक्ट्स)', value: 'user' }
+    { label: 'Superadmin (All Projects Access)', value: 'superadmin' },
+    { label: 'Admin (Project Administrator)', value: 'admin' },
+    { label: 'Regular User (Assigned Projects Only)', value: 'user' }
   ];
 
   constructor(
@@ -130,7 +130,7 @@ export class MasterUsersModalComponent implements OnInit {
         u.can_create_project = newVal;
         this.cdr.markForCheck();
       },
-      error: (err) => alert('अधिकार अपडेट विफल: ' + (err?.error?.error || err.message))
+      error: (err) => alert('Permission update failed: ' + (err?.error?.error || err.message))
     });
   }
 
@@ -160,7 +160,7 @@ export class MasterUsersModalComponent implements OnInit {
   public submitNewUser(): void {
     this.formError = '';
     if (!this.newUsername.trim() || !this.newPassword.trim()) {
-      this.formError = 'यूज़रनेम और पासवर्ड अनिवार्य हैं';
+      this.formError = 'Username and password are required';
       return;
     }
 
