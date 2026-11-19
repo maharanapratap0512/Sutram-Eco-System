@@ -39,6 +39,7 @@ if (process.platform !== 'win32') {
 function findIscc() {
   const candidates = [
     process.env.INNO_SETUP_ISCC,
+    path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Inno Setup 6', 'ISCC.exe'),
     'C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe',
     'C:\\Program Files\\Inno Setup 6\\ISCC.exe',
     'ISCC.exe',
