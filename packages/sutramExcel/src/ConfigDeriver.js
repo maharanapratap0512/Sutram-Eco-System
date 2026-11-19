@@ -23,15 +23,23 @@
 
 class ConfigDeriver {
 
+    constructor(engine = null) {
+        this.engine = engine;
+    }
+
     // ─────────────────────────────────────────────────────────
     // DERIVE — main entry point
-    // tableInstance = sutramCore BaseTable
+    // tableInstance = sutramCore BaseTable or table name string
     // extend        = developer's extra config
     // ─────────────────────────────────────────────────────────
 
     derive(tableInstance, extend = {}) {
-        const tableName = tableInstance.tableName;
-        const columns   = tableInstance.columns ?? {};
+        let tbl = tableInstance;
+        if (typeof tableInstance === 'string' && this.engine) {
+            try { tbl = this.engine.table(tableInstance); } catch {}
+        }
+        const tableName = tbl?.tableName || (typeof tableInstance === 'string' ? tableInstance : '');
+        const columns   = tbl?.columns ?? {};
         const headers   = [];
 
         for (const [colName, def] of Object.entries(columns)) {

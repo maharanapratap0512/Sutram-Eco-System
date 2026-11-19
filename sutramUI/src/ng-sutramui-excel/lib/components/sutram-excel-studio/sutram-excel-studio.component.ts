@@ -143,7 +143,7 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
         const p = JSON.parse(raw);
         if (p && p.project_slug) return p.project_slug;
       }
-    } catch {}
+    } catch { }
     return 'default';
   }
 
@@ -249,7 +249,7 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
     // Refresh FK reference cache for this table in case another sheet references it
     try {
       this.refCache.preloadTables([tableName]);
-    } catch {}
+    } catch { }
 
     const isCurrentlyActive = this.activeSheetId === tableName || this.selectedTableName === tableName;
 
@@ -684,15 +684,16 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
     // Additional Schema Columns if any
     if (Array.isArray(allSchemaCols)) {
       for (const sc of allSchemaCols) {
-        const colName = sc.col_name || sc.name;
+        let colName = sc.col_name || sc.name;
+        const isPk = !!sc.pk || colName === '_id' || colName === 'id';
+        if (isPk) colName = '_id';
         if (this.isTechnicalCol(colName) || processedCols.has(colName)) continue;
         processedCols.add(colName);
-        const isPk = !!sc.pk || colName === '_id';
         const isPwd = this.isPasswordCol(sc) || this.isPasswordCol({ key: colName });
         this.allConfigColumns.push({
           key: colName,
-          name: sc.name || colName,
-          short_name: isPk ? `${colName} (id)` : (sc.name || colName),
+          name: colName === '_id' ? '_id' : (sc.name || colName),
+          short_name: isPk ? `_id (id)` : (sc.name || colName),
           col_name: colName,
           group: null,
           type: isPk ? 'id' : (isPwd ? 'password' : (sc.type || sc.col_type || 'string')),
@@ -717,6 +718,10 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
       });
       processedCols.add('_id');
     }
+
+    // Strip any redundant standalone 'id' column if it was just an alias for primary key
+    this.allConfigColumns = this.allConfigColumns.filter(c => !(c.key === 'id' && c.type === 'id'));
+    this.selectedColumnKeys.delete('id');
 
     if (this.selectedColumnKeys.size === 0 && this.allConfigColumns.length > 0) {
       const first = this.allConfigColumns.find(c => !c.group && c.key !== '_id') || this.allConfigColumns[0];
@@ -743,9 +748,9 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
       if (c.group) return false;
       if (!q) return true;
       return (c.name && c.name.toLowerCase().includes(q)) ||
-             (c.short_name && c.short_name.toLowerCase().includes(q)) ||
-             (c.label && c.label.toLowerCase().includes(q)) ||
-             (c.key && c.key.toLowerCase().includes(q));
+        (c.short_name && c.short_name.toLowerCase().includes(q)) ||
+        (c.label && c.label.toLowerCase().includes(q)) ||
+        (c.key && c.key.toLowerCase().includes(q));
     });
   }
 
@@ -766,10 +771,10 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
       const matchingCols = cols.filter(c => {
         if (!q) return true;
         return groupName.toLowerCase().includes(q) ||
-               (c.name && c.name.toLowerCase().includes(q)) ||
-               (c.short_name && c.short_name.toLowerCase().includes(q)) ||
-               (c.label && c.label.toLowerCase().includes(q)) ||
-               (c.key && c.key.toLowerCase().includes(q));
+          (c.name && c.name.toLowerCase().includes(q)) ||
+          (c.short_name && c.short_name.toLowerCase().includes(q)) ||
+          (c.label && c.label.toLowerCase().includes(q)) ||
+          (c.key && c.key.toLowerCase().includes(q));
       });
 
       if (q && matchingCols.length === 0) continue;
@@ -970,15 +975,15 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
     const t = (col.type || col.field_type || col.col_type || '').toLowerCase();
     const k = (col.key || col.name || col.col_name || '').toLowerCase();
     return t === 'password' ||
-           k === 'password' ||
-           k.endsWith('_password') ||
-           k.includes('password') ||
-           k === 'pwd' ||
-           k.endsWith('_pwd') ||
-           k === 'pin' ||
-           k.endsWith('_pin') ||
-           k === 'secret' ||
-           k === 'secret_hash';
+      k === 'password' ||
+      k.endsWith('_password') ||
+      k.includes('password') ||
+      k === 'pwd' ||
+      k.endsWith('_pwd') ||
+      k === 'pin' ||
+      k.endsWith('_pin') ||
+      k === 'secret' ||
+      k === 'secret_hash';
   }
 
   public isNumberCol(col: any): boolean {
@@ -986,7 +991,7 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
     const t = (col.type || col.field_type || '').toLowerCase();
     const k = (col.key || col.name || col.col_name || '').toLowerCase();
     return t === 'number' || t === 'integer' || t === 'numeric' || t === 'float' || t === 'decimal' ||
-           k === 'price' || k === 'amount' || k === 'total' || k === 'rate' || k === 'qty' || k === 'quantity';
+      k === 'price' || k === 'amount' || k === 'total' || k === 'rate' || k === 'qty' || k === 'quantity';
   }
 
   private saveColConfigTimeout: any = null;
@@ -1034,11 +1039,11 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
     // Save to localStorage immediately as local cache
     try {
       localStorage.setItem(`sutram_table_col_config_${tbl}`, JSON.stringify(payload));
-    } catch {}
+    } catch { }
 
     // Save to backend sys_meta
     this.api.saveTableUiConfig(tbl, payload).subscribe({
-      next: () => {},
+      next: () => { },
       error: (err) => console.warn('[SutramStudio] Auto-saving col config error:', err)
     });
   }
@@ -1397,7 +1402,7 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
           this.currentUser = parsed;
           hasLoadedUser = true;
         }
-      } catch {}
+      } catch { }
     }
     this.loadCurrentUserRights();
 
@@ -1867,13 +1872,13 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
     active: number;
     can_ocr?: number;
   } = {
-    username: '',
-    password: '',
-    display_name: '',
-    role: 'author',
-    active: 1,
-    can_ocr: 1
-  };
+      username: '',
+      password: '',
+      display_name: '',
+      role: 'author',
+      active: 1,
+      can_ocr: 1
+    };
   public roleDropdownOptions = [
     { label: '👑 Admin (पूर्ण नियंत्रण - Triggers, Schema, Rules)', value: 'admin' },
     { label: '👤 Author (ऑपरेशनल - View, Edit, Column Visibility & Style)', value: 'author' }
@@ -1914,7 +1919,7 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
       };
       try {
         localStorage.setItem('sutram_active_user', JSON.stringify(this.currentUser));
-      } catch {}
+      } catch { }
 
       this.currentUserRightsMap.clear();
       if (Array.isArray(event.rights)) {
@@ -2243,7 +2248,7 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
     let fieldMap = {};
     try {
       fieldMap = JSON.parse(this.newTriggerDef.field_map_str || '{}');
-    } catch {}
+    } catch { }
 
     const payload = {
       trigger_name: this.newTriggerDef.trigger_name,
@@ -2440,12 +2445,20 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
     }
 
     if (event.colKey === 'hl') {
-      const rowId = row._rawOriginal?._id ?? row._rawOriginal?.id ?? row.cells?.['_id']?.value;
+      const headers = this.state.headers() || [];
+      const pkHeader = headers.find((h: any) => h.is_pk || h.pk);
+      const pkCol = pkHeader ? (pkHeader.col_name || pkHeader.name) : null;
+      const rowId = (pkCol && row.cells?.[pkCol]?.value !== undefined && row.cells[pkCol].value !== null)
+        ? row.cells[pkCol].value
+        : (row._rawOriginal?._id ?? row._rawOriginal?.id ?? (row as any)._id ?? (row as any).id ?? row.cells?.['_id']?.value ?? row.cells?.['id']?.value);
       if (rowId !== undefined && rowId !== null && this.currentActiveTableName && !this.isCurrentSheetRough) {
-        this.api.updateRow(this.currentActiveTableName, {
-          _id: rowId,
+        const updatePayload: any = {
           hl: event.value ? 1 : 0
-        }).subscribe({
+        };
+        if (pkCol) updatePayload[pkCol] = rowId;
+        updatePayload._id = rowId;
+        updatePayload.id = rowId;
+        this.api.updateRow(this.currentActiveTableName, updatePayload).subscribe({
           next: () => {
             if (row._rawOriginal) row._rawOriginal.hl = event.value ? 1 : 0;
             this.cdr.markForCheck();
@@ -2831,7 +2844,7 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
           }));
         localStorage.setItem(`sutram_studio_open_tabs_${slug}`, JSON.stringify(toSave));
       }
-    } catch {}
+    } catch { }
   }
 
   // ── Sheet Tab Inline Renaming & Context Menu ──────────────────
@@ -2986,13 +2999,13 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
           if (!parsed.projectSlug || parsed.projectSlug === slug) {
             raw = legacyRaw;
           }
-        } catch {}
+        } catch { }
       }
     }
     if (raw) {
       try {
         return JSON.parse(raw);
-      } catch {}
+      } catch { }
     }
     return null;
   }
@@ -3034,7 +3047,7 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
                     type: parsed.type || 'rough'
                   });
                 }
-              } catch {}
+              } catch { }
             }
           }
         }
@@ -3237,7 +3250,7 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
     if (savedFavs) {
       try {
         this.favoriteTables = new Set(JSON.parse(savedFavs));
-      } catch {}
+      } catch { }
     } else {
       this.favoriteTables = new Set<string>();
     }
@@ -3246,7 +3259,7 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
     if (savedFavReps) {
       try {
         this.favoriteReports = new Set(JSON.parse(savedFavReps));
-      } catch {}
+      } catch { }
     }
 
     // Dynamic Reports fetching from API
@@ -3313,7 +3326,7 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
               });
             }
           }
-        } catch {}
+        } catch { }
 
         // 3. Add pinned / favorite tables not already opened
         tables.forEach((t: any) => {
@@ -3403,7 +3416,7 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
               restoredFromLocal = true;
             }
           }
-        } catch {}
+        } catch { }
 
         // Apply any saved UI column preferences from backend sys_meta
         this.api.getTableUiConfig(tableName).subscribe({
@@ -3412,13 +3425,13 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
               this.applySavedUiConfig(uiRes);
               try {
                 localStorage.setItem(`sutram_table_col_config_${tableName}`, JSON.stringify(uiRes));
-              } catch {}
+              } catch { }
             } else if (restoredFromLocal) {
               // Sync local preferences to backend sys_meta if backend was clean
               this.autoSaveColumnConfig();
             }
           },
-          error: () => {}
+          error: () => { }
         });
 
         // Auto-load UI reactive sutras / formulas for this table and sync temp columns
@@ -3623,17 +3636,17 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
     const colsToPopulate: any[] = this.allConfigColumns.length > 0
       ? this.allConfigColumns
       : (cfg.headers || []).map((h: any) => ({
-          key: h.col_name || h.name,
-          name: h.name,
-          short_name: h.name,
-          col_name: h.col_name,
-          type: h.type || 'string',
-          ref_table: h.ref_table,
-          ref_as: h.ref_as || h.ref_table,
-          is_fk_main: !!h.ref_table,
-          is_fk_subcol: false,
-          is_fk_raw: false
-        }));
+        key: h.col_name || h.name,
+        name: h.name,
+        short_name: h.name,
+        col_name: h.col_name,
+        type: h.type || 'string',
+        ref_table: h.ref_table,
+        ref_as: h.ref_as || h.ref_table,
+        is_fk_main: !!h.ref_table,
+        is_fk_subcol: false,
+        is_fk_raw: false
+      }));
 
     colsToPopulate.forEach((col: any) => {
       let rawVal: any;
@@ -3771,9 +3784,9 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
     const colsToPopulate: any[] = this.allConfigColumns.length > 0
       ? this.allConfigColumns
       : (cfg.headers || []).map((h: any) => ({
-          key: h.col_name || h.name,
-          name: h.name
-        }));
+        key: h.col_name || h.name,
+        name: h.name
+      }));
 
     colsToPopulate.forEach((col: any) => {
       const cellKey = col.key || col.name;
@@ -4678,11 +4691,18 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
           payload[h.col_name] = val;
         });
 
-        const rowId = (r as any)._id || r._rawOriginal?._id || r._rawOriginal?.id;
-        const isUpdate = !r.isNew && !!rowId;
+        const pkHeader = (cfg.headers || []).find((h: any) => h.is_pk || h.pk);
+        const pkCol = pkHeader ? (pkHeader.col_name || pkHeader.name) : null;
+        const rowId = (pkCol && r.cells?.[pkCol]?.value !== undefined && r.cells[pkCol].value !== null && r.cells[pkCol].value !== '')
+          ? r.cells[pkCol].value
+          : ((r as any)._id || (r as any).id || r._rawOriginal?._id || r._rawOriginal?.id || r.cells?.['_id']?.value || r.cells?.['id']?.value);
+        const isUpdate = !r.isNew && (rowId !== undefined && rowId !== null && rowId !== '');
         if (isUpdate) {
+          if (pkCol) payload[pkCol] = rowId;
           payload._id = rowId;
+          payload.id = rowId;
         } else {
+          if (pkCol) delete payload[pkCol];
           delete payload._id;
           delete payload.id;
         }
@@ -4699,11 +4719,18 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
             progress.inserted++;
             syncedRowNums.push(r.rowNum);
             const anyRes = res as any;
-            const newInsertedId = anyRes?.newData?._id || anyRes?.data?._id || (typeof anyRes?.newData === 'number' ? anyRes.newData : null);
+            const newInsertedId = anyRes?.newData?._id || anyRes?.newData?.id || (pkCol && anyRes?.newData?.[pkCol]) || anyRes?.data?._id || anyRes?.data?.id || (typeof anyRes?.newData === 'number' ? anyRes.newData : null);
             if (newInsertedId) {
               (r as any)._id = newInsertedId;
-              if (r._rawOriginal) r._rawOriginal._id = newInsertedId;
+              (r as any).id = newInsertedId;
+              if (r._rawOriginal) {
+                r._rawOriginal._id = newInsertedId;
+                r._rawOriginal.id = newInsertedId;
+                if (pkCol) r._rawOriginal[pkCol] = newInsertedId;
+              }
               if (r.cells && r.cells['_id']) r.cells['_id'].value = newInsertedId;
+              if (r.cells && r.cells['id']) r.cells['id'].value = newInsertedId;
+              if (pkCol && r.cells && r.cells[pkCol]) r.cells[pkCol].value = newInsertedId;
               syncedRowNums.push(newInsertedId);
             }
             if (rowId) syncedRowNums.push(rowId);
@@ -5092,23 +5119,23 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
     // Derive column keys and bilingual headers
     const allConfigCols: StudioConfigColumn[] = columns && columns.length > 0
       ? columns.map((c: any, idx: number) => ({
-          key: c.key || c.header_text || `col_${idx}`,
-          name: c.header_text || c.name || c.key,
-          short_name: c.header_text || c.name || c.key,
-          col_name: c.key || c.col_name || `col_${idx}`,
-          type: c.type || 'string',
-          visible: true,
-          display_order: idx + 1
-        }))
+        key: c.key || c.header_text || `col_${idx}`,
+        name: c.header_text || c.name || c.key,
+        short_name: c.header_text || c.name || c.key,
+        col_name: c.key || c.col_name || `col_${idx}`,
+        type: c.type || 'string',
+        visible: true,
+        display_order: idx + 1
+      }))
       : colKeys.map((k, idx) => ({
-          key: k,
-          name: k,
-          short_name: k,
-          col_name: k,
-          type: 'string',
-          visible: true,
-          display_order: idx + 1
-        }));
+        key: k,
+        name: k,
+        short_name: k,
+        col_name: k,
+        type: 'string',
+        visible: true,
+        display_order: idx + 1
+      }));
 
     const mockHeaders = allConfigCols.map(c => ({
       name: c.name,
@@ -5180,7 +5207,7 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
     let fieldMap = {};
     try {
       fieldMap = JSON.parse(def.field_map_str || '{}');
-    } catch {}
+    } catch { }
 
     const payload = {
       trigger_name: def.trigger_name,
@@ -5317,9 +5344,9 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
         if (this.reminderResultsSearch && this.reminderResultsSearch.trim()) {
           const q = this.reminderResultsSearch.toLowerCase();
           const match = item.rule_name.toLowerCase().includes(q) ||
-                        item.item_name.toLowerCase().includes(q) ||
-                        item.details.toLowerCase().includes(q) ||
-                        (item.action_table && item.action_table.toLowerCase().includes(q));
+            item.item_name.toLowerCase().includes(q) ||
+            item.details.toLowerCase().includes(q) ||
+            (item.action_table && item.action_table.toLowerCase().includes(q));
           if (!match) continue;
         }
 
@@ -5660,15 +5687,15 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
     const t = (col.type || col.field_type || col.col_type || '').toLowerCase();
     const k = (col.key || col.name || col.col_name || '').toLowerCase();
     return t === 'password' ||
-           k === 'password' ||
-           k.endsWith('_password') ||
-           k.includes('password') ||
-           k === 'pwd' ||
-           k.endsWith('_pwd') ||
-           k === 'pin' ||
-           k.endsWith('_pin') ||
-           k === 'secret' ||
-           k === 'secret_hash';
+      k === 'password' ||
+      k.endsWith('_password') ||
+      k.includes('password') ||
+      k === 'pwd' ||
+      k.endsWith('_pwd') ||
+      k === 'pin' ||
+      k.endsWith('_pin') ||
+      k === 'secret' ||
+      k === 'secret_hash';
   }
 
   public get isCurrentColumnUnmasked(): boolean {

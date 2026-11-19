@@ -269,9 +269,10 @@ class Engine {
 
     insert(tableName, data, full = true) {
         const tbl = this.table(tableName);
+        const pk = tbl.pkName || '_id';
         const result = this.db.transaction(() => {
             const id = tbl.insert(data, false);
-            const newRow = tbl.getOne({ _id: id }, { full: false });
+            const newRow = tbl.getOne({ [pk]: id }, { full: false });
             this.trigger.execute(tableName, 'INSERT', newRow, null);
             return id;
         })();
@@ -280,12 +281,13 @@ class Engine {
 
     update(tableName, data, where, full = true) {
         const tbl = this.table(tableName);
-        const id = typeof where === 'object' ? (where._id ?? null) : null;
-        const oldRow = id ? tbl.getOne({ _id: id }, { full: false }) : null;
+        const pk = tbl.pkName || '_id';
+        const id = typeof where === 'object' ? (where[pk] ?? where._id ?? where.id ?? null) : null;
+        const oldRow = id ? tbl.getOne({ [pk]: id }, { full: false }) : null;
 
         const result = this.db.transaction(() => {
             tbl.update(data, where, false);
-            const newRow = id ? tbl.getOne({ _id: id }, { full: false }) : null;
+            const newRow = id ? tbl.getOne({ [pk]: id }, { full: false }) : null;
             this.trigger.execute(tableName, 'UPDATE', newRow, oldRow);
             return id;
         })();
@@ -294,7 +296,9 @@ class Engine {
     }
 
     updateById(tableName, data, id, full = true) {
-        return this.update(tableName, data, { _id: id }, full);
+        const tbl = this.table(tableName);
+        const pk = tbl.pkName || '_id';
+        return this.update(tableName, data, { [pk]: id }, full);
     }
 
     delete(tableName, where) {
@@ -307,7 +311,7 @@ class Engine {
             const refs = this.schema.getReferencingConstraints(tableName);
             const rawDb = this.db.db || this.db;
             for (const ref of refs) {
-                const targetCol = ref.ref_col || '_id';
+                const targetCol = ref.ref_col || tbl.pkName || '_id';
                 const targetVals = [...new Set(
                     oldRows.map(r => r[targetCol]).filter(v => v !== null && v !== undefined)
                 )];
@@ -354,7 +358,9 @@ class Engine {
     }
 
     deleteById(tableName, id) {
-        return this.delete(tableName, { _id: id });
+        const tbl = this.table(tableName);
+        const pk = tbl.pkName || '_id';
+        return this.delete(tableName, { [pk]: id });
     }
 
     // ─────────────────────────────────────────────────────────

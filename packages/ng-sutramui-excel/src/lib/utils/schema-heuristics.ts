@@ -26,9 +26,9 @@ export class SchemaHeuristicsUtil {
    */
   public static sanitizeIdentifier(name: string): string {
     if (!name) return '';
-    return String(name)
-      .trim()
-      .toLowerCase()
+    const trimmed = String(name).trim().toLowerCase();
+    if (trimmed === '_id') return '_id';
+    return trimmed
       .replace(/[\s\-\.\/]+/g, '_')
       .replace(/[^a-z0-9_]/g, '')
       .replace(/^_+|_+$/g, '')

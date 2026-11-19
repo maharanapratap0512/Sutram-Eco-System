@@ -94,10 +94,19 @@ class ExcelImporter {
 
         // 8. insert
         try {
+            const tableName = tableConfig.table || tableConfig.tableName || tableConfig.table_name;
+            const tbl = this.engine.table ? this.engine.table(tableName) : null;
+            const pk = tbl?.pkName || '_id';
+            if (row[pk] === null || row[pk] === undefined || row[pk] === '') {
+                delete row[pk];
+            }
             if (row._id === null || row._id === undefined || row._id === '') {
                 delete row._id;
             }
-            const result = await this.engine.insert(tableConfig.table, row);
+            if (row.id === null || row.id === undefined || row.id === '') {
+                delete row.id;
+            }
+            const result = await this.engine.insert(tableName, row);
             return { status: 'inserted', data: row, newData: result };
         } catch (err) {
             return { status: 'rejected', data: row, error: err.message };
@@ -136,12 +145,22 @@ class ExcelImporter {
         }
 
         try {
-            if (!row._id && tableConfig.duplicateOn?.length) {
+            const tableName = tableConfig.table || tableConfig.tableName || tableConfig.table_name;
+            const tbl = this.engine.table ? this.engine.table(tableName) : null;
+            const pk = tbl?.pkName || '_id';
+            let targetId = row[pk] ?? row._id ?? row.id;
+
+            if ((targetId === undefined || targetId === null || targetId === '') && tableConfig.duplicateOn?.length) {
                 const existing = await this._checkDuplicate(row, tableConfig);
-                if (existing.length) row._id = existing[0]._id;
+                if (existing.length) {
+                    targetId = existing[0][pk] ?? existing[0]._id ?? existing[0].id;
+                    row[pk] = targetId;
+                }
             }
-            if (!row._id) return { status: 'rejected', data: row, error: 'No _id for update' };
-            const result = await this.engine.updateById(tableConfig.table, row, row._id);
+            if (targetId === undefined || targetId === null || targetId === '') {
+                return { status: 'rejected', data: row, error: `No primary key (${pk}) for update` };
+            }
+            const result = await this.engine.updateById(tableName, row, targetId);
             return { status: 'updated', data: row, newData: result };
         } catch (err) {
             return { status: 'rejected', data: row, error: err.message };
@@ -231,11 +250,12 @@ class ExcelImporter {
     // ─────────────────────────────────────────────────────────
 
     async _applyAutoIncrement(row, tableConfig) {
+        const tblName = tableConfig.table || tableConfig.tableName || tableConfig.table_name;
         for (const col of (tableConfig.autoIncrement ?? [])) {
             if (!row[col]) {
                 try {
                     const r = this.engine.prepare(
-                        `SELECT MAX(${col}) as last FROM ${tableConfig.table}`
+                        `SELECT MAX(${col}) as last FROM ${tblName}`
                     ).get();
                     row[col] = (r?.last ?? 0) + 1;
                 } catch {
@@ -339,7 +359,8 @@ class ExcelImporter {
         }
         if (!Object.keys(where).length) return [];
         try {
-            return this.engine.getAll(tableConfig.table, where, { full: false });
+            const tblName = tableConfig.table || tableConfig.tableName || tableConfig.table_name;
+            return this.engine.getAll(tblName, where, { full: false });
         } catch {
             return [];
         }

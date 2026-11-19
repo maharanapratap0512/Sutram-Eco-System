@@ -240,14 +240,15 @@ export class TableDesignerDialogComponent implements OnInit, OnChanges {
       }
     }
 
+    const isPkCol = !!(c.is_pk || c.column_name === '_id');
     return {
-      name: c.column_name,
+      name: isPkCol ? '_id' : c.column_name,
       original_name: c.column_name,
-      label: c.label || c.column_name,
+      label: isPkCol ? 'ID (Primary Key)' : (c.label || c.column_name),
       sql_type: sqlType,
       col_type: colType,
       length_precision: lenPrec,
-      is_pk: !!(c.is_pk || c.column_name === '_id'),
+      is_pk: isPkCol,
       is_required: !!c.is_required,
       is_unique: !!c.is_unique,
       has_index: !!c.has_index,
@@ -664,7 +665,7 @@ export class TableDesignerDialogComponent implements OnInit, OnChanges {
       label: this.newTableLabel || rawName,
       description: this.newTableDesc || null,
       columns: validCols.map(c => ({
-        column_name: SchemaHeuristicsUtil.sanitizeIdentifier(c.name) || c.name,
+        column_name: c.is_pk ? '_id' : (SchemaHeuristicsUtil.sanitizeIdentifier(c.name) || c.name),
         original_name: c.original_name || null,
         label: c.label || c.name,
         col_type: c.col_type,

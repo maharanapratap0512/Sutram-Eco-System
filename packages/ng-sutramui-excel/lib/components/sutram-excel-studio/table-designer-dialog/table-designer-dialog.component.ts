@@ -504,7 +504,7 @@ export class TableDesignerDialogComponent implements OnInit {
       label: this.newTableLabel || rawName,
       description: this.newTableDesc || null,
       columns: validCols.map(c => ({
-        column_name: c.name,
+        column_name: c.is_pk ? '_id' : (SchemaHeuristicsUtil.sanitizeIdentifier(c.name) || c.name),
         label: c.label || c.name,
         col_type: c.col_type,
         sql_type: c.sql_type,

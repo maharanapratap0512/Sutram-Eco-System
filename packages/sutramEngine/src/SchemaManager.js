@@ -476,17 +476,17 @@ class SchemaManager {
         // Preserve mandatory _id and hl system columns
         const incoming = columns.map((c, idx) => ({
             ...c,
-            column_name: String(c.column_name || c.name || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '_'),
+            column_name: c.is_pk ? '_id' : String(c.column_name || c.name || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '_'),
             original_name: c.original_name ? String(c.original_name).trim() : null,
             col_type: this._normalizeColType(c),
             sort_order: c.sort_order ?? idx
-        })).filter(c => c.column_name);
+        })).filter(c => c.column_name && (c.is_pk ? c.column_name === '_id' : c.column_name !== '_id' && c.column_name !== 'id'));
 
-        if (!incoming.some(c => c.is_pk || c.column_name === '_id')) {
-            const origPk = existingMap.get('_id');
+        if (!incoming.some(c => c.column_name === '_id')) {
+            const origPk = existingMap.get('_id') || existingMap.get('id');
             incoming.unshift({
                 column_name: '_id',
-                original_name: origPk ? '_id' : null,
+                original_name: origPk ? origPk.column_name : null,
                 label: origPk?.label || 'ID',
                 col_type: 'number',
                 sql_type: 'INTEGER',
@@ -1092,24 +1092,33 @@ class SchemaManager {
 
     // Internal create — no rebootstrap (caller decides when)
     _createTableInternal(tableName, label, description, columns, joins) {
-        const hasPk = (columns || []).some(c => c.is_pk || c.column_name === '_id');
-        const allColumns = hasPk
-            ? [...columns]
-            : [{ column_name: '_id', label: 'ID', col_type: 'number', sql_type: 'INTEGER', is_pk: 1, is_required: 0 }, ...(columns || [])];
+        // Enforce _id as the single compulsory auto-increment primary key
+        const pkCol = (columns || []).find(c => c.is_pk || c.column_name === '_id');
+        const customCols = (columns || []).filter(c => !c.is_pk && c.column_name !== '_id' && c.column_name !== 'id' && c.column_name !== 'hl');
+        const allColumns = [
+            {
+                column_name: '_id',
+                label: pkCol?.label || 'ID',
+                col_type: 'number',
+                sql_type: 'INTEGER',
+                is_pk: 1,
+                is_required: 0,
+                sort_order: 0
+            },
+            ...customCols
+        ];
 
         // Automatic compulsory Highlight flag (hl) for every table
-        const hasHl = allColumns.some(c => c.column_name === 'hl');
-        if (!hasHl) {
-            allColumns.push({
-                column_name: 'hl',
-                label: 'Highlight Flag',
-                col_type: 'number',
-                sql_type: 'TINYINT',
-                is_pk: 0,
-                is_required: 0,
-                default_value: '0'
-            });
-        }
+        allColumns.push({
+            column_name: 'hl',
+            label: 'Highlight Flag',
+            col_type: 'number',
+            sql_type: 'TINYINT',
+            is_pk: 0,
+            is_required: 0,
+            default_value: '0',
+            sort_order: allColumns.length
+        });
 
         this.db.transaction(() => {
             const tableRes = this.db.prepare(`
@@ -1218,7 +1227,7 @@ class SchemaManager {
 
         for (const col of columns) {
             if (col.is_pk || col.column_name === '_id') {
-                parts.push(`"${col.column_name}" INTEGER PRIMARY KEY AUTOINCREMENT`);
+                parts.push(`"_id" INTEGER PRIMARY KEY AUTOINCREMENT`);
                 continue;
             }
 

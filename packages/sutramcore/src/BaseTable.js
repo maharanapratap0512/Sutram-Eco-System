@@ -34,6 +34,13 @@ class BaseTable {
         this.columns = meta.columns;
         this.joins = meta.joins ?? {};
         this._stmtCache = {};
+
+        // Resolve primary key column dynamically (Rule 12: Zero Domain Hardcoding)
+        this.pkName = Object.keys(this.columns).find(c => this.columns[c]?.pk)
+            || ('_id' in this.columns ? '_id' : null)
+            || ('id' in this.columns ? 'id' : null)
+            || Object.keys(this.columns)[0]
+            || '_id';
     }
 
     // ─────────────────────────────────────────────────────────
@@ -42,7 +49,7 @@ class BaseTable {
 
     // Insert a single row.
     // full: true  → returns full desanitized joined object  (default)
-    // full: false → returns just the new _id               (bulk / transaction use)
+    // full: false → returns just the new _id / id          (bulk / transaction use)
     insert(data, full = true) {
         const [sql, params] = this._buildInsert(data);
         const id = this._stmt(sql).run(...params).lastInsertRowid;
@@ -50,23 +57,23 @@ class BaseTable {
     }
 
     // Update row(s) matching where.
-    // where: { _id: 5 }  or  "date > '2024-01-01'"
-    // full: true  → returns updated row (only when where has _id)
+    // where: { _id: 5 }  or  { id: 5 }  or  "date > '2024-01-01'"
+    // full: true  → returns updated row (only when where has PK)
     // full: false → returns the id
     update(data, where, full = true) {
         const [sql, params] = this._buildUpdate(data, where);
         this._stmt(sql).run(...params);
-        const id = typeof where === 'object' ? (where._id ?? null) : null;
+        const id = typeof where === 'object' ? (where[this.pkName] ?? where._id ?? where.id ?? null) : null;
         return full && id ? this.getById(id) : id;
     }
 
-    // Convenience: update by _id
+    // Convenience: update by primary key
     updateById(data, id, full = true) {
-        return this.update(data, { _id: id }, full);
+        return this.update(data, { [this.pkName]: id }, full);
     }
 
     // Delete row(s) matching where.
-    // where: { _id: 5 }  or  { batch_id: 3 }  or  "active = 0"
+    // where: { _id: 5 }  or  { id: 5 }  or  "active = 0"
     // Returns number of deleted rows.
     delete(where) {
         const { clause, params } = this._buildWhere(where);
@@ -75,14 +82,14 @@ class BaseTable {
         return this._stmt(sql).run(...params).changes;
     }
 
-    // Convenience: delete by _id
+    // Convenience: delete by primary key
     deleteById(id) {
-        return this.delete({ _id: id });
+        return this.delete({ [this.pkName]: id });
     }
 
-    // Single row by _id — always returns full joined object
+    // Single row by primary key — always returns full joined object
     getById(id) {
-        return this.getOne({ _id: id });
+        return this.getOne({ [this.pkName]: id });
     }
 
     // Single row matching where.
@@ -159,7 +166,7 @@ class BaseTable {
 
     // Prepare data FOR the database.
     // Coerces types, applies defaults, strips unknown columns.
-    // mode 'insert' → skips _id, applies defaults for missing fields
+    // mode 'insert' → skips PK, applies defaults for missing fields
     // mode 'update' → only processes fields present in data
     sanitize(data, mode = 'insert') {
         const result = {};
@@ -167,7 +174,7 @@ class BaseTable {
         for (const colName in this.columns) {
             const def = this.columns[colName];
 
-            if (mode === 'insert' && colName === '_id') continue;
+            if (mode === 'insert' && (colName === this.pkName || colName === '_id' || colName === 'id' || def.pk)) continue;
             if (mode === 'update' && !(colName in data)) continue;
 
             let val = colName in data ? data[colName] : def.default;
@@ -286,6 +293,10 @@ class BaseTable {
 
     _buildUpdate(data, where) {
         const clean = this.sanitize(data, 'update');
+        // Primary key must never be included in the SET clause of UPDATE
+        if (this.pkName) delete clean[this.pkName];
+        delete clean._id;
+        delete clean.id;
         if (Object.keys(clean).length === 0) throw new Error(`[sutramcore] No valid fields to update in "${this.tableName}"`);
 
         const { clause, params: whereParams } = this._buildWhere(where);
@@ -354,9 +365,16 @@ class BaseTable {
             const params = [];
             const clause = keys
                 .map(k => {
-                    const col = prefixTable && !k.includes('.')
-                        ? `${this.tableName}.${k}`
-                        : k;
+                    let colKey = k;
+                    // Transparently map _id or id if the exact column does not exist on this table
+                    if (this.columns && !this.columns[colKey]) {
+                        if ((colKey === '_id' || colKey === 'id') && this.pkName) {
+                            colKey = this.pkName;
+                        }
+                    }
+                    const col = prefixTable && !colKey.includes('.')
+                        ? `${this.tableName}.${colKey}`
+                        : colKey;
                     const val = where[k];
                     if (Array.isArray(val)) {
                         if (val.length === 0) return '1=0'; // Safe fallback for empty array

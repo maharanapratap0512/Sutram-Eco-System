@@ -552,8 +552,13 @@ function buildExcelRouter(sutramExcel) {
                 targetIds = [id];
             } else if (Array.isArray(ids)) {
                 targetIds = ids.filter(x => x !== undefined && x !== null);
-            } else if (row && (row._id !== undefined || row.id !== undefined)) {
-                targetIds = [row._id !== undefined ? row._id : row.id];
+            } else if (row) {
+                const tbl = sutramExcel.engine && sutramExcel.engine.table ? sutramExcel.engine.table(tblName) : null;
+                const pk = tbl?.pkName || '_id';
+                const val = row[pk] ?? row._id ?? row.id;
+                if (val !== undefined && val !== null) {
+                    targetIds = [val];
+                }
             }
 
             if (targetIds.length === 0) {
