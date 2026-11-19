@@ -54,6 +54,14 @@ app.use(cors(config.cors));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
+// 2A. Serve Sutram UI Static Assets (Portable Single-Port & LAN Web Access)
+const primaryDistPath = path.resolve(__dirname, '../dist');
+const legacyDistPath = path.resolve(__dirname, '../sutramUI/dist');
+const uiDistPath = fs.existsSync(primaryDistPath) ? primaryDistPath : legacyDistPath;
+if (fs.existsSync(uiDistPath)) {
+  app.use(express.static(uiDistPath));
+}
+
 // ─────────────────────────────────────────────────────────────
 // 3. Master Workspace & Project Management REST APIs
 // ─────────────────────────────────────────────────────────────
@@ -1506,19 +1514,19 @@ app.use('/api', (req, res, next) => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// 9. Root Info & Healthcheck
+// 9. Root & Healthcheck (Serve Angular Single Page App on `/`)
 // ─────────────────────────────────────────────────────────────
-app.get('/', (req, res) => {
+function sendApiStatus(req, res) {
   try {
     const defaultInstance = getActiveProject(req);
     const tables = Object.keys(defaultInstance.engine._schema || {}).filter(t => !t.startsWith('sys_'));
     res.json({
       app: 'Sutram Multi-Project Universal ERP Engine Platform',
       status: 'online',
-      activeProject: defaultInstance.project.project_slug,
+      activeProject: defaultInstance.project?.project_slug || 'default',
       activeTables: tables,
       projectsCount: projectManager.listProjects().length,
-      frontend: 'SutramUI Angular App (Runs independently on port 4300)'
+      frontend: fs.existsSync(path.join(uiDistPath, 'index.html')) ? 'Integrated SutramUI Production Bundle' : 'SutramUI Dev Server (port 4300)'
     });
   } catch (e) {
     res.json({
@@ -1527,6 +1535,16 @@ app.get('/', (req, res) => {
       error: e.message
     });
   }
+}
+
+app.get(['/api', '/api/status'], sendApiStatus);
+
+app.get('/', (req, res, next) => {
+  const indexHtml = path.join(uiDistPath, 'index.html');
+  if (fs.existsSync(indexHtml) && req.accepts('html')) {
+    return res.sendFile(indexHtml);
+  }
+  sendApiStatus(req, res);
 });
 
 app.get('/api/health', (req, res) => {
@@ -1695,13 +1713,9 @@ updateRouter.post('/rollback', (req, res) => {
 app.use('/api/_sutram/update', updateRouter);
 
 // ─────────────────────────────────────────────────────────────
-// 9C. Serve Sutram UI Frontend (Portable Single-Port & LAN Web Access)
+// 9C. HTML5 Client-Side Routing Fallback (Angular Single Page App)
 // ─────────────────────────────────────────────────────────────
-const primaryDistPath = path.resolve(__dirname, '../dist');
-const legacyDistPath = path.resolve(__dirname, '../sutramUI/dist');
-const uiDistPath = fs.existsSync(primaryDistPath) ? primaryDistPath : legacyDistPath;
 if (fs.existsSync(uiDistPath)) {
-  app.use(express.static(uiDistPath));
   app.get('*', (req, res, next) => {
     // Let API routes fall through
     if (req.path.startsWith('/api') || req.path.startsWith('/_sutram')) {
