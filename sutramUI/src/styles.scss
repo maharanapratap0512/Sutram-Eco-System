@@ -77,6 +77,87 @@ html, body {
   cursor: pointer;
 }
 
+/* ── PrimeNG Tag & Badge ERP Enhancements (Rule 15) ───────────── */
+.p-tag {
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  line-height: 1.2;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  letter-spacing: 0.3px;
+
+  /* Default / Normal / Secondary (Zero Solid Purple) */
+  background: rgba(100, 116, 139, 0.12) !important;
+  color: #64748b !important;
+  border: 1px solid rgba(100, 116, 139, 0.25) !important;
+
+  .p-tag-icon {
+    font-size: 0.65rem;
+    margin-right: 0;
+  }
+
+  &.p-tag-rounded {
+    border-radius: 9999px;
+  }
+
+  &.p-tag-secondary {
+    background: rgba(100, 116, 139, 0.12) !important;
+    color: #64748b !important;
+    border: 1px solid rgba(100, 116, 139, 0.25) !important;
+  }
+
+  /* Subtle, elegant, translucent aesthetic */
+  &.p-tag-success {
+    background: rgba(16, 185, 129, 0.12) !important;
+    color: #10b981 !important;
+    border: 1px solid rgba(16, 185, 129, 0.3) !important;
+  }
+
+  &.p-tag-danger {
+    background: rgba(239, 68, 68, 0.12) !important;
+    color: #ef4444 !important;
+    border: 1px solid rgba(239, 68, 68, 0.3) !important;
+  }
+
+  &.p-tag-info,
+  &.p-tag-primary {
+    background: rgba(99, 102, 241, 0.12) !important;
+    color: var(--erp-primary, #6366f1) !important;
+    border: 1px solid rgba(99, 102, 241, 0.28) !important;
+  }
+
+  &.p-tag-warning {
+    background: rgba(245, 158, 11, 0.12) !important;
+    color: #f59e0b !important;
+    border: 1px solid rgba(245, 158, 11, 0.3) !important;
+  }
+}
+
+.p-badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0 0.45rem;
+  min-width: 1.3rem;
+  height: 1.3rem;
+  line-height: 1.3rem;
+  border-radius: 9999px;
+
+  &.p-badge-info {
+    background: rgba(99, 102, 241, 0.12) !important;
+    color: var(--erp-primary, #6366f1) !important;
+    border: 1px solid rgba(99, 102, 241, 0.25) !important;
+  }
+
+  &.p-badge-success {
+    background: rgba(16, 185, 129, 0.12) !important;
+    color: #10b981 !important;
+    border: 1px solid rgba(16, 185, 129, 0.25) !important;
+  }
+}
+
 /* ── Universal Form Controls Dynamic Theming (Rule 21) ─────────── */
 .p-inputtext,
 input.p-inputtext,
@@ -292,6 +373,59 @@ textarea {
         background: #6366f1 !important;
         border-color: #6366f1 !important;
       }
+    }
+  }
+
+  /* PrimeNG Tag & Badge in Dark Mode */
+  .p-tag {
+    /* Default / Normal / Secondary in Dark Mode */
+    background: rgba(100, 116, 139, 0.14) !important;
+    color: #94a3b8 !important;
+    border: 1px solid rgba(100, 116, 139, 0.28) !important;
+
+    &.p-tag-secondary {
+      background: rgba(100, 116, 139, 0.14) !important;
+      color: #94a3b8 !important;
+      border: 1px solid rgba(100, 116, 139, 0.28) !important;
+    }
+
+    &.p-tag-success {
+      background: rgba(16, 185, 129, 0.14) !important;
+      color: #34d399 !important;
+      border: 1px solid rgba(16, 185, 129, 0.35) !important;
+    }
+
+    &.p-tag-danger {
+      background: rgba(239, 68, 68, 0.14) !important;
+      color: #f87171 !important;
+      border: 1px solid rgba(239, 68, 68, 0.35) !important;
+    }
+
+    &.p-tag-info,
+    &.p-tag-primary {
+      background: rgba(99, 102, 241, 0.14) !important;
+      color: #818cf8 !important;
+      border: 1px solid rgba(129, 140, 248, 0.35) !important;
+    }
+
+    &.p-tag-warning {
+      background: rgba(245, 158, 11, 0.14) !important;
+      color: #fbbf24 !important;
+      border: 1px solid rgba(245, 158, 11, 0.35) !important;
+    }
+  }
+
+  .p-badge {
+    &.p-badge-info {
+      background: rgba(99, 102, 241, 0.18) !important;
+      color: #818cf8 !important;
+      border: 1px solid rgba(129, 140, 248, 0.35) !important;
+    }
+
+    &.p-badge-success {
+      background: rgba(16, 185, 129, 0.18) !important;
+      color: #34d399 !important;
+      border: 1px solid rgba(16, 185, 129, 0.35) !important;
     }
   }
 }

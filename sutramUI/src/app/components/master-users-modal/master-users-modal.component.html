@@ -20,7 +20,11 @@
         <div class="bar-name-row">
           <span class="bar-name">{{ projectContext.activeMasterUser.display_name || projectContext.activeMasterUser.username }}</span>
           <span class="bar-login font-mono">@{{ projectContext.activeMasterUser.username }}</span>
-          <p-tag [severity]="projectContext.activeMasterUser.role === 'superadmin' ? 'danger' : 'info'" [value]="projectContext.activeMasterUser.role | uppercase"></p-tag>
+          <p-tag
+            [severity]="projectContext.activeMasterUser.role === 'superadmin' ? 'danger' : 'info'"
+            [value]="projectContext.activeMasterUser.role | uppercase"
+            [rounded]="true">
+          </p-tag>
         </div>
       </div>
     </div>
@@ -138,7 +142,7 @@
                   <i class="pi" [ngClass]="u.can_create_project === 1 ? 'pi-check-circle' : 'pi-ban'"></i>
                   <span>{{ u.can_create_project === 1 ? 'Allowed' : 'Blocked' }}</span>
                 </button>
-                <p-tag *ngIf="u.role === 'superadmin'" icon="pi pi-shield" severity="danger" value="Full Access"></p-tag>
+                <p-tag *ngIf="u.role === 'superadmin'" icon="pi pi-shield" severity="danger" value="Full Access" [rounded]="true"></p-tag>
               </td>
               <td style="text-align: center;">
                 <p-tag
@@ -146,6 +150,7 @@
                   icon="pi pi-check"
                   severity="success"
                   value="Active"
+                  [rounded]="true"
                   title="Currently active user">
                 </p-tag>
                 <button
@@ -174,7 +179,7 @@
             </span>
           </div>
 
-          <p-tag *ngIf="selectedUser.role === 'superadmin' || selectedUser.username === 'admin'" icon="pi pi-check" severity="success" value="All Projects"></p-tag>
+          <p-tag *ngIf="selectedUser.role === 'superadmin' || selectedUser.username === 'admin'" icon="pi pi-check" severity="success" value="All Projects" [rounded]="true"></p-tag>
         </div>
 
         <!-- Superadmin Explanation & Full Project View -->
@@ -196,7 +201,7 @@
                 <span class="proj-title">{{ p.project_name }}</span>
                 <span class="proj-slug font-mono">({{ p.project_slug }}.db)</span>
               </div>
-              <p-tag icon="pi pi-check-circle" severity="success" value="Full Access"></p-tag>
+              <p-tag icon="pi pi-check-circle" severity="success" value="Full Access" [rounded]="true"></p-tag>
             </div>
           </div>
         </ng-container>

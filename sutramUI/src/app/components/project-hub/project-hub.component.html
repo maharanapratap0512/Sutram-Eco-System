@@ -5,7 +5,7 @@
       <div class="brand">
         <i class="pi pi-th-large brand-icon"></i>
         <span class="brand-title">Sutram</span>
-        <p-tag severity="info" value="Workspace Hub"></p-tag>
+        <span class="brand-badge">Workspace Hub</span>
       </div>
 
       <!-- Quick Search Bar -->
@@ -34,7 +34,7 @@
         [title]="'User: ' + (activeMasterUser?.username || '') + ' (' + (activeMasterUser?.role || '') + ') — Click to manage users & access'">
         <i class="pi pi-user user-icon"></i>
         <span class="user-name">{{ activeMasterUser?.display_name || activeMasterUser?.username || 'Master Admin' }}</span>
-        <p-tag [severity]="activeMasterUser?.role === 'superadmin' ? 'danger' : (activeMasterUser?.role === 'admin' ? 'info' : 'secondary')" [value]="(activeMasterUser?.role || 'admin') | uppercase"></p-tag>
+        <p-tag [value]="(activeMasterUser?.role || 'admin') | uppercase" [severity]="activeMasterUser?.role === 'superadmin' ? 'danger' : 'info'"></p-tag>
       </div>
 
       <!-- Refresh Projects Button -->
@@ -128,17 +128,19 @@
           </div>
 
           <div class="card-top-actions">
-            <!-- Network Visibility Status Badge -->
+            <!-- Network Visibility Status Tag -->
             <p-tag
-              [severity]="isProjectLive(p.project_slug) ? 'success' : 'secondary'"
-              [icon]="isProjectLive(p.project_slug) ? 'pi pi-wifi' : 'pi pi-lock'"
+              [severity]="isProjectLive(p.project_slug) ? 'success' : undefined"
+              [styleClass]="!isProjectLive(p.project_slug) ? 'p-tag-secondary' : ''"
+              [rounded]="true"
+              [icon]="isProjectLive(p.project_slug) ? 'pi pi-globe' : 'pi pi-lock'"
               [value]="isProjectLive(p.project_slug) ? 'Live on LAN' : 'Private'"
               (click)="toggleProjectShare(p, $event)"
               class="cursor-pointer"
               [title]="isProjectLive(p.project_slug) ? 'Live on LAN (click to stop sharing)' : 'Private (click to share on LAN)'">
             </p-tag>
 
-            <p-tag *ngIf="p.access_role" severity="info" [value]="p.access_role | uppercase"></p-tag>
+            <p-tag *ngIf="p.access_role" [value]="p.access_role | uppercase" severity="info"></p-tag>
 
             <button
               pButton
@@ -153,7 +155,7 @@
 
         <div class="card-content">
           <h3 class="project-title">{{ p.project_name }}</h3>
-          <p-tag icon="pi pi-database" severity="secondary" [value]="p.project_slug + '.db'" class="font-mono mb-2 block"></p-tag>
+          <p-tag icon="pi pi-database" styleClass="p-tag-secondary font-mono my-1" [value]="p.project_slug + '.db'"></p-tag>
           <p class="project-desc">{{ p.description || 'Database workspace & spreadsheet studio' }}</p>
         </div>
 
@@ -179,7 +181,7 @@
         <span>Network Projects</span>
       </h2>
       <div class="section-actions">
-        <p-tag *ngIf="peers.length > 0" icon="pi pi-desktop" severity="success" [value]="peers.length + ' Online'"></p-tag>
+        <p-tag *ngIf="peers.length > 0" icon="pi pi-desktop" severity="info" [rounded]="true" [value]="peers.length + ' Online'"></p-tag>
         <button
           pButton
           type="button"
@@ -216,10 +218,10 @@
           </div>
 
           <div class="card-top-actions">
-            <p-tag icon="pi pi-desktop" severity="info" [value]="item.peer.hostname || item.peer.name" [title]="item.peer.ip + ':' + (item.peer.httpPort || 3300)"></p-tag>
+            <p-tag icon="pi pi-desktop" styleClass="p-tag-secondary" [value]="item.peer.hostname || item.peer.name" [title]="item.peer.ip + ':' + (item.peer.httpPort || 3300)"></p-tag>
             <p-tag
+              [severity]="item.project.authType === 'none' ? 'success' : 'warning'"
               [icon]="item.project.authType === 'none' ? 'pi pi-check-circle' : 'pi pi-lock'"
-              [severity]="item.project.authType === 'none' ? 'success' : (item.project.authType === 'pin' ? 'warning' : 'danger')"
               [value]="item.project.authType === 'pin' ? 'PIN' : (item.project.authType === 'password' ? 'Pass' : 'Open')">
             </p-tag>
           </div>
@@ -227,7 +229,7 @@
 
         <div class="card-content">
           <h3 class="project-title">{{ item.project.name }}</h3>
-          <p-tag icon="pi pi-sitemap" severity="secondary" [value]="item.peer.ip + ':' + (item.peer.httpPort || 3300) + ' / ' + item.project.id + '.db'" class="font-mono mb-2 block"></p-tag>
+          <p-tag icon="pi pi-sitemap" severity="info" [value]="item.peer.ip + ':' + (item.peer.httpPort || 3300) + ' / ' + item.project.id + '.db'" class="font-mono my-1"></p-tag>
           <p class="project-desc">{{ item.project.description || 'Shared project available on local network' }}</p>
         </div>
 
