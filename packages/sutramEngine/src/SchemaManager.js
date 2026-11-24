@@ -1120,6 +1120,53 @@ class SchemaManager {
             sort_order: allColumns.length
         });
 
+        // ── MySQL Async Execution Path ────────────────────────
+        if (this.engine?._dialect === 'mysql' && this.engine._adapter) {
+            const adapter = this.engine._adapter;
+            return (async () => {
+                const tableRes = await adapter.run(`
+                    INSERT INTO sys_table (table_name, label, description)
+                    VALUES (?, ?, ?)
+                `, [tableName, label ?? tableName, description ?? null]);
+                const tableId = tableRes.insertId;
+
+                for (let i = 0; i < allColumns.length; i++) {
+                    const col = allColumns[i];
+                    const normalizedType = this._normalizeColType(col);
+                    const refSelectVal = col.ref_select ? (typeof col.ref_select === 'object' ? JSON.stringify(col.ref_select) : String(col.ref_select)) : null;
+                    await adapter.run(`
+                        INSERT INTO sys_column
+                          (table_id, column_name, label, col_type, is_required, default_value,
+                           is_pk, ref_table, ref_col, ref_as, ref_select, sort_order)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    `, [tableId, col.column_name, col.label ?? col.column_name, normalizedType, col.is_required ? 1 : 0,
+                        col.default_value !== undefined && col.default_value !== null ? String(col.default_value) : null,
+                        col.is_pk ? 1 : 0, col.ref_table ?? null, col.ref_col ?? null, col.ref_as ?? null, refSelectVal, col.sort_order ?? i]);
+                }
+
+                for (const join of (joins || [])) {
+                    await adapter.run(`
+                        INSERT INTO sys_join
+                          (table_id, join_type, join_key, child_table, junction_table,
+                           fk_col, target_col, as_name, select_cols)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    `, [tableId, join.join_type, join.join_key, join.child_table, join.junction_table ?? null,
+                        join.fk_col, join.target_col, join.as_name ?? join.join_key, join.select_cols ?? '["*"]']);
+                }
+
+                await adapter.run(this._buildCreateSQL(tableName, allColumns));
+
+                for (const col of allColumns) {
+                    if (col.has_index && col.column_name !== '_id') {
+                        const idxName = `idx_${tableName}_${col.column_name}`;
+                        try {
+                            await adapter.run(`CREATE INDEX \`${idxName}\` ON \`${tableName}\`(\`${col.column_name}\`)`);
+                        } catch {}
+                    }
+                }
+            })();
+        }
+
         this.db.transaction(() => {
             const tableRes = this.db.prepare(`
                 INSERT INTO sys_table (table_name, label, description)
@@ -1223,39 +1270,41 @@ class SchemaManager {
     }
 
     _buildCreateSQL(tableName, columns) {
+        const isMySQL = this.engine?._dialect === 'mysql';
+        const q = isMySQL ? '`' : '"';
         const parts = [];
 
         for (const col of columns) {
             if (col.is_pk || col.column_name === '_id') {
-                parts.push(`"_id" INTEGER PRIMARY KEY AUTOINCREMENT`);
+                parts.push(isMySQL ? '`_id` INT AUTO_INCREMENT PRIMARY KEY' : '"_id" INTEGER PRIMARY KEY AUTOINCREMENT');
                 continue;
             }
 
-            let colDef = `"${col.column_name}"`;
+            let colDef = `${q}${col.column_name}${q}`;
 
             if (col.sql_type) {
                 const upperSql = String(col.sql_type).toUpperCase();
                 if (upperSql === 'PASSWORD') {
                     colDef += ` VARCHAR(${col.length_precision || 255})`;
                 } else if (upperSql === 'FK') {
-                    colDef += ' INTEGER';
+                    colDef += isMySQL ? ' INT' : ' INTEGER';
                 } else if (col.length_precision && ['VARCHAR', 'CHAR', 'DECIMAL', 'NUMERIC', 'FLOAT'].includes(upperSql)) {
                     colDef += ` ${upperSql}(${col.length_precision})`;
                 } else if (upperSql === 'ENUM' && col.length_precision) {
-                    colDef += ` TEXT CHECK("${col.column_name}" IN (${col.length_precision}))`;
+                    colDef += isMySQL ? ` ENUM(${col.length_precision})` : ` TEXT CHECK("${col.column_name}" IN (${col.length_precision}))`;
                 } else {
                     colDef += ` ${upperSql}`;
                 }
             } else {
                 // 100% Backward compatibility for legacy callers without sql_type
                 switch (col.col_type) {
-                    case 'number': colDef += ' DECIMAL(10,2)'; break;
-                    case 'boolean': colDef += ' TINYINT'; break;
+                    case 'number': colDef += isMySQL ? ' DECIMAL(15,2)' : ' DECIMAL(10,2)'; break;
+                    case 'boolean': colDef += isMySQL ? ' TINYINT(1)' : ' TINYINT'; break;
                     case 'date': colDef += ' DATE'; break;
                     case 'datetime': colDef += ' DATETIME'; break;
-                    case 'json': colDef += ' TEXT'; break;
+                    case 'json': colDef += isMySQL ? ' JSON' : ' TEXT'; break;
                     case 'password': colDef += ` VARCHAR(${col.length_precision || 255})`; break;
-                    default: colDef += ' TEXT';
+                    default: colDef += isMySQL ? ' VARCHAR(255)' : ' TEXT';
                 }
             }
 
@@ -1263,7 +1312,7 @@ class SchemaManager {
             if (col.is_unique) colDef += ' UNIQUE';
 
             if (col.default_type === 'CURRENT_TIMESTAMP') {
-                colDef += ` DEFAULT (datetime('now', 'localtime'))`;
+                colDef += isMySQL ? ' DEFAULT CURRENT_TIMESTAMP' : ` DEFAULT (datetime('now', 'localtime'))`;
             } else if (col.default_type === 'NULL') {
                 colDef += ` DEFAULT NULL`;
             } else if (col.default_value !== undefined && col.default_value !== null && String(col.default_value).trim() !== '') {
@@ -1273,17 +1322,22 @@ class SchemaManager {
             }
 
             if (col.ref_table && col.ref_col) {
-                colDef += ` REFERENCES "${col.ref_table}"("${col.ref_col}") ON DELETE ${col.on_delete || 'RESTRICT'}`;
+                colDef += ` REFERENCES ${q}${col.ref_table}${q}(${q}${col.ref_col}${q}) ON DELETE ${col.on_delete || 'RESTRICT'}`;
             }
 
             parts.push(colDef);
         }
 
         // always add timestamps
-        parts.push(`"created_at" TEXT DEFAULT (datetime('now', 'localtime'))`);
-        parts.push(`"updated_at" TEXT DEFAULT (datetime('now', 'localtime'))`);
-
-        return `CREATE TABLE IF NOT EXISTS "${tableName}" (\n  ${parts.join(',\n  ')}\n)`;
+        if (isMySQL) {
+            parts.push('`created_at` DATETIME DEFAULT CURRENT_TIMESTAMP');
+            parts.push('`updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP');
+            return `CREATE TABLE IF NOT EXISTS \`${tableName}\` (\n  ${parts.join(',\n  ')}\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`;
+        } else {
+            parts.push(`"created_at" TEXT DEFAULT (datetime('now', 'localtime'))`);
+            parts.push(`"updated_at" TEXT DEFAULT (datetime('now', 'localtime'))`);
+            return `CREATE TABLE IF NOT EXISTS "${tableName}" (\n  ${parts.join(',\n  ')}\n)`;
+        }
     }
 
     _buildAlterAddColumn(tableName, col) {

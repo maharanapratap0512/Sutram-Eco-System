@@ -412,59 +412,6 @@
       align-items: center;
       gap: 0.35rem;
 
-      .visibility-badge {
-        font-size: 0.64rem;
-        font-weight: 700;
-        padding: 0.12rem 0.45rem;
-        border-radius: 4px;
-        display: inline-flex;
-        align-items: center;
-        gap: 3px;
-        transition: all 0.15s ease;
-        user-select: none;
-        cursor: pointer;
-
-        &.live {
-          background: rgba(16, 185, 129, 0.14);
-          color: #10b981;
-          border: 1px solid rgba(16, 185, 129, 0.3);
-
-          .live-dot {
-            width: 5px;
-            height: 5px;
-            border-radius: 50%;
-            background: #10b981;
-            box-shadow: 0 0 5px #10b981;
-            animation: pulse-dot 2s infinite ease-in-out;
-          }
-
-          &:hover {
-            background: rgba(16, 185, 129, 0.25);
-          }
-        }
-
-        &.private {
-          background: rgba(100, 116, 139, 0.12);
-          color: var(--erp-text-muted, #64748b);
-          border: 1px solid rgba(100, 116, 139, 0.25);
-
-          &:hover {
-            background: rgba(100, 116, 139, 0.2);
-            color: var(--erp-text, #f8fafc);
-          }
-        }
-      }
-
-      .access-role-badge {
-        font-size: 0.62rem;
-        font-weight: 700;
-        padding: 0.1rem 0.35rem;
-        border-radius: 4px;
-        background: var(--erp-bg, #f8fafc);
-        color: var(--erp-text-muted, #64748b);
-        border: 1px solid var(--erp-surface-border, #e2e8f0);
-      }
-
       .delete-card-btn {
         width: 24px;
         height: 24px;
@@ -492,23 +439,6 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-    }
-
-    .slug-tag {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.25rem;
-      font-size: 0.68rem;
-      color: var(--erp-text-muted, #64748b);
-      background: var(--erp-bg, #f8fafc);
-      padding: 0.1rem 0.4rem;
-      border-radius: 4px;
-      width: fit-content;
-      max-width: 100%;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      border: 1px solid var(--erp-surface-border, #e2e8f0);
     }
 
     .project-desc {
@@ -553,18 +483,6 @@
   .section-actions {
     display: flex;
     align-items: center;
-
-    .peer-status-tag {
-      font-size: 0.72rem;
-      font-weight: 600;
-      color: #06b6d4;
-      background: rgba(6, 182, 212, 0.12);
-      border: 1px solid rgba(6, 182, 212, 0.3);
-      padding: 0.18rem 0.55rem;
-      border-radius: 12px;
-      display: inline-flex;
-      align-items: center;
-    }
 
     .refresh-lan-btn {
       width: 28px;
@@ -630,45 +548,7 @@
     background: rgba(6, 182, 212, 0.15) !important;
     color: #06b6d4 !important;
   }
-
-  .peer-machine-pill {
-    font-size: 0.62rem;
-    font-weight: 600;
-    padding: 0.1rem 0.4rem;
-    border-radius: 4px;
-    background: rgba(99, 102, 241, 0.1);
-    color: #818cf8;
-    border: 1px solid rgba(99, 102, 241, 0.2);
-    max-width: 120px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .auth-requirement-pill {
-    font-size: 0.62rem;
-    font-weight: 700;
-    padding: 0.1rem 0.35rem;
-    border-radius: 4px;
-
-    &.open {
-      background: rgba(16, 185, 129, 0.12);
-      color: #10b981;
-      border: 1px solid rgba(16, 185, 129, 0.25);
-    }
-
-    &.pin,
-    &.pass {
-      background: rgba(245, 158, 11, 0.12);
-      color: #f59e0b;
-      border: 1px solid rgba(245, 158, 11, 0.25);
-    }
-  }
-
-  .network-slug {
-    color: #06b6d4 !important;
-    border-color: rgba(6, 182, 212, 0.25) !important;
-  }
+}
 
   .peer-age {
     font-size: 0.68rem;

@@ -21,6 +21,7 @@
 const { MySQLAdapter }    = require('./MySQLAdapter');
 const MySQLBaseTable      = require('./MySQLBaseTable');
 const MySQLReportManager  = require('./MySQLReportManager');
+const MySQLIntrospector   = require('./MySQLIntrospector');
 
 class MySQLSutram {
 
@@ -113,6 +114,59 @@ class MySQLSutram {
 
     async queryOne(sql, params = []) {
         return this.adapter.get(sql, params);
+    }
+
+    async run(sql, params = []) {
+        return this.adapter.run(sql, params);
+    }
+
+    prepare(sql) {
+        const adapter = this.adapter;
+        return {
+            all: (...params) => adapter.all(sql, params.flat()),
+            get: (...params) => adapter.get(sql, params.flat()),
+            run: (...params) => adapter.run(sql, params.flat()),
+        };
+    }
+
+    async introspect() {
+        return MySQLIntrospector.introspect(this.adapter);
+    }
+
+    async purgeSutram() {
+        return MySQLIntrospector.purgeSutram(this.adapter);
+    }
+
+    async cloneDatabase(sourceDb, targetDb) {
+        return MySQLIntrospector.cloneDatabase(this.adapter, sourceDb, targetDb);
+    }
+
+    async createTable(def) {
+        const { table_name, columns = [] } = def;
+        const parts = [];
+        for (const col of columns) {
+            if (col.is_pk || col.column_name === '_id') {
+                parts.push('`_id` INT AUTO_INCREMENT PRIMARY KEY');
+                continue;
+            }
+            const colName = `\`${col.column_name}\``;
+            let sqlType = 'VARCHAR(255)';
+            const t = String(col.col_type || col.sql_type || 'string').toLowerCase();
+            if (t === 'number' || t === 'integer' || t === 'int') sqlType = 'INT';
+            else if (t === 'decimal' || t === 'float' || t === 'double') sqlType = 'DECIMAL(15,2)';
+            else if (t === 'boolean' || t === 'tinyint') sqlType = 'TINYINT(1)';
+            else if (t === 'json') sqlType = 'JSON';
+            else if (t === 'date') sqlType = 'DATE';
+            else if (t === 'datetime') sqlType = 'DATETIME';
+            else if (t === 'text') sqlType = 'TEXT';
+            else if (t === 'password') sqlType = 'VARCHAR(255)';
+
+            const req = col.is_required ? 'NOT NULL' : 'NULL';
+            const defVal = (col.default_value !== undefined && col.default_value !== null) ? `DEFAULT '${col.default_value}'` : '';
+            parts.push(`${colName} ${sqlType} ${req} ${defVal}`.trim());
+        }
+        const sql = `CREATE TABLE IF NOT EXISTS \`${table_name}\` (\n  ${parts.join(',\n  ')}\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`;
+        return this.adapter.run(sql);
     }
 
     async close() {

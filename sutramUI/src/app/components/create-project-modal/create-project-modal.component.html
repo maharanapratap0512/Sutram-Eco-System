@@ -4,129 +4,376 @@
   [dismissableMask]="!isCreating"
   [draggable]="false"
   [resizable]="false"
-  [style]="{ width: '96vw', maxWidth: '640px' }"
+  [style]="{ width: '96vw', maxWidth: '880px' }"
   styleClass="sutram-create-project-dialog"
-  [header]="activeMode === 'upload' ? 'Attach / Upload SQLite Database' : 'Create New Project'"
+  header="Create New Project"
   (onHide)="close()">
 
   <div class="create-project-body">
-    <!-- ── Mode Selector Tabs ──────────────────────────────────────── -->
-    <div class="mode-tabs" *ngIf="!showConsole">
-      <button
-        type="button"
-        class="mode-tab-btn"
-        [class.active]="activeMode === 'blank'"
-        (click)="switchMode('blank')">
-        <i class="pi pi-plus-circle"></i>
-        <span>New Blank Project</span>
-      </button>
-
-      <button
-        type="button"
-        class="mode-tab-btn"
-        [class.active]="activeMode === 'upload'"
-        (click)="switchMode('upload')">
-        <i class="pi pi-upload"></i>
-        <span>Select / Upload DB</span>
-      </button>
-    </div>
-
-    <!-- ── Intro Notice ───────────────────────────────────────────── -->
-    <div class="intro-banner" *ngIf="!showConsole">
-      <div class="intro-icon" [style.background-color]="selectedColor + '20'" [style.color]="selectedColor">
-        <i [class]="activeMode === 'upload' ? 'pi pi-database' : selectedIcon"></i>
-      </div>
-      <div class="intro-text">
-        <h3 *ngIf="activeMode === 'blank'">New Blank Database</h3>
-        <h3 *ngIf="activeMode === 'upload'">Attach Existing SQLite Database</h3>
-        <p *ngIf="activeMode === 'blank'">Each project gets its own isolated SQLite database and admin security controls.</p>
-        <p *ngIf="activeMode === 'upload'">Select any SQLite database file. Sutram automatically introspects its schema without altering existing data.</p>
-      </div>
-    </div>
-
-    <!-- ── Error Alert ────────────────────────────────────────────── -->
+    <!-- ── Error Alert (PrimeNG styling) ───────────────────────────── -->
     <div *ngIf="errorMessage && !showConsole" class="error-banner">
       <i class="pi pi-exclamation-triangle"></i>
       <span>{{ errorMessage }}</span>
     </div>
 
-    <!-- ── Upload DB Section (When Upload Mode Active) ─────────────── -->
-    <div class="db-upload-section" *ngIf="activeMode === 'upload' && !showConsole">
-      <!-- File Selector Button -->
-      <div class="file-picker-box" *ngIf="!inspectionReport">
-        <input
-          #fileInput
-          type="file"
-          accept=".db,.sqlite,.sqlite3"
-          (change)="onFileSelected($event)"
-          style="display: none;" />
-        <button
-          pButton
-          type="button"
-          class="p-button-outlined p-button-sm upload-trigger-btn"
-          icon="pi pi-upload"
-          label="Choose SQLite File (.db, .sqlite)"
-          [loading]="isUploading"
-          (click)="fileInput.click()">
-        </button>
-        <span class="file-hint">Select any SQLite database file from your computer</span>
+    <!-- ── 1. Top Section: Project Details (Side-by-Side 38% / 62%) ── -->
+    <div class="project-identity-section" *ngIf="!showConsole">
+      <!-- Row 1: Project Name (38%) & Description (62%) -->
+      <div class="form-row-2 name-desc-row">
+        <div class="form-group name-col">
+          <label class="form-label">Project Name <span class="required-star">*</span></label>
+          <input
+            type="text"
+            pInputText
+            class="p-inputtext-sm w-full"
+            [(ngModel)]="projectName"
+            placeholder="e.g. Dental Hospital ERP"
+            autofocus />
+          <!-- PrimeNG Tag for Live Slug Preview -->
+          <p-tag
+            *ngIf="calculatedSlug"
+            [icon]="resolvedMode === 'mysql' ? 'pi pi-server' : 'pi pi-database'"
+            severity="info"
+            [value]="calculatedDbFile"
+            class="mt-1 font-mono">
+          </p-tag>
+        </div>
+
+        <div class="form-group desc-col">
+          <label class="form-label">Description <span class="optional-hint">(Optional)</span></label>
+          <input
+            type="text"
+            pInputText
+            class="p-inputtext-sm w-full"
+            [(ngModel)]="projectDesc"
+            placeholder="e.g. Clinic records, billing & inventory management" />
+        </div>
       </div>
 
-      <!-- Quick Inspection Overview Card -->
-      <div class="inspection-overview-card" *ngIf="inspectionReport">
-        <div class="overview-header">
-          <div class="file-identity">
-            <i class="pi pi-database db-icon"></i>
-            <div class="file-names">
-              <span class="file-name">{{ inspectionReport.fileName || uploadedFileName }}</span>
-              <span class="file-size">{{ formatFileSize(inspectionReport.fileSize) }}</span>
-            </div>
-          </div>
-          <button
-            pButton
-            type="button"
-            class="p-button-text p-button-sm change-file-btn"
-            icon="pi pi-refresh"
-            label="Change File"
-            (click)="resetFileSelection(fileInput)">
-          </button>
+      <!-- Row 2: In-Project Administrator Details (Side-by-Side) -->
+      <div class="form-section-header">
+        <i class="pi pi-shield"></i>
+        <span>In-Project Admin Credentials</span>
+      </div>
+
+      <div class="form-row-2">
+        <div class="form-group flex-1">
+          <label class="form-label">Admin Username</label>
+          <input
+            type="text"
+            pInputText
+            class="p-inputtext-sm w-full font-mono"
+            [(ngModel)]="adminUsername"
+            placeholder="admin" />
         </div>
 
-        <!-- Status Pill -->
-        <div class="status-banner" [class.sutram-banner]="inspectionReport.isSutramDB" [class.universal-banner]="!inspectionReport.isSutramDB">
-          <i class="pi" [ngClass]="inspectionReport.isSutramDB ? 'pi-check-circle' : 'pi-bolt'"></i>
-          <div class="banner-text">
-            <span class="banner-title" *ngIf="inspectionReport.isSutramDB">
-              ✓ Existing Sutram Database (v{{ inspectionReport.engineVersion || 1 }})
-            </span>
-            <span class="banner-title" *ngIf="!inspectionReport.isSutramDB">
-              ⚡ Universal SQLite Database
-            </span>
-            <span class="banner-subtitle" *ngIf="inspectionReport.isSutramDB">
-              This database is already Sutram-enabled. All triggers and sheets will load immediately.
-            </span>
-            <span class="banner-subtitle" *ngIf="!inspectionReport.isSutramDB">
-              Sutram metadata (sys_* & xls_*) will be attached automatically without modifying existing data.
-            </span>
+        <div class="form-group flex-1">
+          <label class="form-label">
+            Admin Password
+            <span class="optional-hint">(Optional - defaults to 'admin')</span>
+          </label>
+          <p-password
+            [(ngModel)]="adminPassword"
+            [toggleMask]="true"
+            [feedback]="false"
+            styleClass="w-full p-inputtext-sm"
+            inputStyleClass="w-full p-inputtext-sm"
+            placeholder="Defaults to 'admin' if left empty">
+          </p-password>
+        </div>
+      </div>
+
+      <!-- Row 3: Theme Accent & Icon (Side-by-Side) -->
+      <div class="form-section-header">
+        <i class="pi pi-palette"></i>
+        <span>Theme Accent & Icon</span>
+      </div>
+
+      <div class="form-row-2 align-items-center">
+        <div class="form-group flex-1">
+          <label class="form-label">Color Accent</label>
+          <div class="color-palette">
+            <button
+              type="button"
+              *ngFor="let c of colorPresets"
+              class="color-dot"
+              [style.background-color]="c"
+              [class.active]="selectedColor === c"
+              (click)="selectedColor = c">
+              <i class="pi pi-check check-mark" *ngIf="selectedColor === c"></i>
+            </button>
           </div>
         </div>
 
-        <!-- Tables Chips List -->
-        <div class="tables-summary" *ngIf="inspectionReport.tables && inspectionReport.tables.length > 0">
-          <div class="tables-label-row">
-            <span class="tables-label">Detected Tables ({{ inspectionReport.tablesCount }}):</span>
-          </div>
-          <div class="tables-chips">
-            <span class="table-chip" *ngFor="let t of inspectionReport.tables">
-              <span class="tbl-name">{{ t.name }}</span>
-              <span class="tbl-count" *ngIf="t.rowCount !== undefined">({{ t.rowCount | number }})</span>
-            </span>
+        <div class="form-group flex-1">
+          <label class="form-label">Icon</label>
+          <div class="icon-selector">
+            <button
+              type="button"
+              *ngFor="let opt of iconPresets"
+              class="icon-btn"
+              [class.active]="selectedIcon === opt.icon"
+              (click)="selectedIcon = opt.icon"
+              [title]="opt.label">
+              <i [class]="opt.icon"></i>
+            </button>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- ── Live Command Log Console View ──────────────────────────── -->
+    <!-- ── 2. Middle Section: Data Source Selection (37% / 63%) ────── -->
+    <div class="data-source-container" *ngIf="!showConsole">
+      <div class="source-section-header">
+        <div class="source-header-titles">
+          <h4><i class="pi pi-database"></i> Storage & Data Source</h4>
+          <p class="source-subtext">
+            Default: <strong>Fresh SQLite database</strong>. Or select an existing SQLite file or MySQL server below:
+          </p>
+        </div>
+        <!-- PrimeNG Tag for Default Indicator -->
+        <p-tag
+          *ngIf="resolvedMode === 'blank'"
+          icon="pi pi-check-circle"
+          severity="success"
+          value="Using Fresh Blank SQLite">
+        </p-tag>
+      </div>
+
+      <div class="source-boxes-grid">
+        <!-- ── Option A: Attach SQLite File (37%) ───────────────────── -->
+        <div class="source-box sqlite-box" [class.box-disabled]="isMySqlActive" [class.box-selected]="isSqliteSelected">
+          <div class="box-header">
+            <div class="box-title-row">
+              <i class="pi pi-file-edit"></i>
+              <span class="box-title">Attach SQLite Database</span>
+            </div>
+            <!-- PrimeNG Tag for Disabled status -->
+            <p-tag *ngIf="isMySqlActive" icon="pi pi-ban" severity="warning" value="MySQL active"></p-tag>
+            <button
+              *ngIf="isSqliteSelected"
+              pButton
+              type="button"
+              class="p-button-text p-button-sm p-button-secondary box-clear-btn"
+              icon="pi pi-times"
+              label="Clear"
+              (click)="resetFileSelection(fileInput)">
+            </button>
+          </div>
+
+          <!-- File Picker Trigger -->
+          <div class="file-picker-box" *ngIf="!sqliteInspectionReport">
+            <input
+              #fileInput
+              type="file"
+              accept=".db,.sqlite,.sqlite3"
+              (change)="onFileSelected($event)"
+              style="display: none;"
+              [disabled]="isMySqlActive" />
+            <button
+              pButton
+              type="button"
+              class="p-button-outlined p-button-sm"
+              icon="pi pi-upload"
+              label="Choose SQLite (.db, .sqlite)"
+              [loading]="isUploading"
+              [disabled]="isMySqlActive"
+              (click)="fileInput.click()">
+            </button>
+            <span class="file-hint">Select any SQLite file from disk to adopt schema & data</span>
+          </div>
+
+          <!-- Quick Inspection Overview Card -->
+          <div class="inspection-card" *ngIf="sqliteInspectionReport">
+            <div class="flex justify-content-between align-items-center mb-2">
+              <div class="flex align-items-center gap-2">
+                <i class="pi pi-database text-primary text-xl"></i>
+                <div class="flex flex-column">
+                  <span class="font-semibold text-sm">{{ sqliteInspectionReport.fileName || uploadedFileName }}</span>
+                  <span class="text-xs text-muted">{{ formatFileSize(sqliteInspectionReport.fileSize) }}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- PrimeNG Tag for Status -->
+            <p-tag
+              [icon]="sqliteInspectionReport.isSutramDB ? 'pi pi-check-circle' : 'pi pi-bolt'"
+              [severity]="sqliteInspectionReport.isSutramDB ? 'success' : 'info'"
+              [value]="sqliteInspectionReport.isSutramDB ? ('Sutram DB (v' + (sqliteInspectionReport.engineVersion || 1) + ')') : 'Raw DB (Ready to Adopt)'"
+              styleClass="w-full justify-content-center p-2 mb-2">
+            </p-tag>
+
+            <!-- Detected Tables Chips with PrimeNG Tags -->
+            <div class="tables-summary" *ngIf="sqliteInspectionReport.tables && sqliteInspectionReport.tables.length > 0">
+              <span class="text-xs font-semibold text-muted block mb-1">
+                Detected Tables ({{ sqliteInspectionReport.tablesCount }}):
+              </span>
+              <div class="flex flex-wrap gap-1 max-h-5rem overflow-y-auto">
+                <p-tag
+                  *ngFor="let t of sqliteInspectionReport.tables"
+                  severity="secondary"
+                  [value]="t.name + (t.rowCount !== undefined ? ' (' + t.rowCount + ')' : '')">
+                </p-tag>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Option B: MySQL Server Connection (63%) ──────────────── -->
+        <div class="source-box mysql-box" [class.box-disabled]="isSqliteSelected" [class.box-selected]="isMySqlActive">
+          <div class="box-header">
+            <div class="box-title-row">
+              <i class="pi pi-server"></i>
+              <span class="box-title">MySQL Server</span>
+            </div>
+            <!-- PrimeNG Tag for Disabled status -->
+            <p-tag *ngIf="isSqliteSelected" icon="pi pi-ban" severity="warning" value="SQLite active"></p-tag>
+            <button
+              *ngIf="selectedDatabase || mysqlPass"
+              pButton
+              type="button"
+              class="p-button-text p-button-sm p-button-secondary box-clear-btn"
+              icon="pi pi-times"
+              label="Reset"
+              (click)="resetMySqlConfig()">
+            </button>
+          </div>
+
+          <div class="mysql-fields" [class.fields-locked]="isSqliteSelected">
+            <div class="form-row-2">
+              <div class="form-group flex-2">
+                <label class="form-label">MySQL Host</label>
+                <input
+                  pInputText
+                  type="text"
+                  [(ngModel)]="mysqlHost"
+                  (ngModelChange)="onMySQLCredsInput()"
+                  placeholder="localhost"
+                  [disabled]="isSqliteSelected"
+                  class="w-full p-inputtext-sm" />
+              </div>
+              <div class="form-group flex-1">
+                <label class="form-label">Port</label>
+                <input
+                  pInputText
+                  type="number"
+                  [(ngModel)]="mysqlPort"
+                  (ngModelChange)="onMySQLCredsInput()"
+                  placeholder="3306"
+                  [disabled]="isSqliteSelected"
+                  class="w-full p-inputtext-sm" />
+              </div>
+            </div>
+
+            <div class="form-row-2">
+              <div class="form-group flex-1">
+                <label class="form-label">MySQL Username</label>
+                <input
+                  pInputText
+                  type="text"
+                  [(ngModel)]="mysqlUser"
+                  (ngModelChange)="onMySQLCredsInput()"
+                  placeholder="root"
+                  [disabled]="isSqliteSelected"
+                  class="w-full p-inputtext-sm" />
+              </div>
+              <div class="form-group flex-1">
+                <label class="form-label">MySQL Password</label>
+                <p-password
+                  [(ngModel)]="mysqlPass"
+                  (ngModelChange)="onMySQLCredsInput()"
+                  [feedback]="false"
+                  [toggleMask]="true"
+                  [disabled]="isSqliteSelected"
+                  placeholder="Password..."
+                  styleClass="w-full p-inputtext-sm"
+                  inputStyleClass="w-full p-inputtext-sm">
+                </p-password>
+              </div>
+            </div>
+
+            <!-- Reactive Database Dropdown -->
+            <div class="form-group">
+              <div class="flex justify-content-between align-items-center mb-1">
+                <label class="form-label m-0">Database Name</label>
+                <span *ngIf="isFetchingDatabases" class="text-xs text-muted">
+                  <i class="pi pi-spin pi-spinner mr-1"></i> Scanning databases...
+                </span>
+                <span *ngIf="!isFetchingDatabases && availableDatabases.length > 0" class="text-xs text-success">
+                  <i class="pi pi-check mr-1"></i> {{ availableDatabases.length }} found
+                </span>
+              </div>
+              
+              <p-dropdown
+                [options]="databaseOptions"
+                [(ngModel)]="selectedDatabase"
+                [editable]="true"
+                [disabled]="isSqliteSelected"
+                placeholder="Pick existing or type new database name..."
+                styleClass="w-full p-inputtext-sm"
+                (onChange)="onDatabaseSelected($event)">
+                <ng-template let-item pTemplate="item">
+                  <div class="flex align-items-center justify-content-between w-full">
+                    <span class="font-medium">{{ item.value }}</span>
+                    <p-tag *ngIf="item.isSutram" value="Sutram DB" severity="info"></p-tag>
+                    <p-tag *ngIf="!item.isSutram" [value]="item.count + ' tables'" severity="secondary"></p-tag>
+                  </div>
+                </ng-template>
+              </p-dropdown>
+
+              <small *ngIf="mysqlIsNewDb && selectedDatabase" class="p-text-info mt-1 block">
+                ✨ New Database: <strong>{{ selectedDatabase }}</strong> will be created on server.
+              </small>
+              <small *ngIf="!mysqlIsNewDb && selectedDatabase && !mysqlClone" class="p-text-success mt-1 block">
+                📂 Existing Database selected. Sutram will adopt schemas without altering tables.
+              </small>
+            </div>
+
+            <!-- PrimeNG Built-in Checkbox for Clone Database Option -->
+            <div class="clone-box-container mt-2" *ngIf="selectedDatabase && !mysqlIsNewDb && !isSqliteSelected">
+              <p-checkbox
+                [(ngModel)]="mysqlClone"
+                [binary]="true"
+                inputId="cloneDbCb"
+                label="Clone Database (create a copy on server instead of using in-place)">
+              </p-checkbox>
+
+              <div class="form-group mt-2" *ngIf="mysqlClone">
+                <label class="text-xs text-muted">Target Cloned Database Name <span class="required-star">*</span></label>
+                <input
+                  pInputText
+                  type="text"
+                  [(ngModel)]="mysqlClonedDbName"
+                  class="w-full font-mono p-inputtext-sm"
+                  placeholder="e.g. database_copy" />
+                <small class="text-xs text-info mt-1 block">
+                  Copy will be created from <code>{{ selectedDatabase }}</code> into <code>{{ mysqlClonedDbName || (selectedDatabase + '_copy') }}</code>.
+                </small>
+              </div>
+            </div>
+
+            <!-- Quick Inspection Overview for MySQL -->
+            <div class="inspection-card mt-2" *ngIf="mysqlInspectionReport">
+              <div class="flex justify-content-between align-items-center">
+                <div class="flex align-items-center gap-2">
+                  <i class="pi pi-server text-primary text-xl"></i>
+                  <span class="font-semibold text-sm">{{ selectedDatabase }}</span>
+                  <p-tag
+                    [severity]="mysqlInspectionReport.isSutramDB ? 'success' : 'info'"
+                    [value]="mysqlInspectionReport.isSutramDB ? ('Sutram (v' + mysqlInspectionReport.engineVersion + ')') : 'Raw DB (Ready to Adopt)'">
+                  </p-tag>
+                </div>
+                <span class="text-xs text-muted">
+                  <i class="pi pi-table mr-1"></i><strong>{{ mysqlInspectionReport.tablesCount }}</strong> Tables
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 3. Live Command Log Console View ──────────────────────────── -->
     <div class="console-terminal-view" *ngIf="showConsole">
       <div class="terminal-header">
         <div class="terminal-dots">
@@ -152,108 +399,6 @@
         <span>Setup complete. Review the logs above, then click 'Open Project' to launch the workspace.</span>
       </div>
     </div>
-
-    <!-- ── Project Form Fields (Always Shared) ────────────────────── -->
-    <div class="form-grid" *ngIf="!showConsole">
-      <!-- 1. Project Name -->
-      <div class="form-group full-width">
-        <label class="form-label">Project Name <span class="required">*</span></label>
-        <input
-          type="text"
-          pInputText
-          class="p-inputtext-sm w-full"
-          [(ngModel)]="projectName"
-          placeholder="e.g. Dental Hospital ERP, Retail Inventory, Accounts 2026"
-          autofocus />
-      </div>
-
-      <!-- 2. Live Slug Preview -->
-      <div class="form-group full-width slug-preview-group" *ngIf="calculatedSlug">
-        <label class="form-label">Database Slug</label>
-        <div class="slug-pill">
-          <i class="pi pi-database pill-icon"></i>
-          <span class="slug-text font-mono">{{ calculatedDbFile }}</span>
-          <span class="slug-hint">✓ Auto-formatted lowercase identifier</span>
-        </div>
-      </div>
-
-      <!-- 3. Description -->
-      <div class="form-group full-width">
-        <label class="form-label">Description</label>
-        <input
-          type="text"
-          pInputText
-          class="p-inputtext-sm w-full"
-          [(ngModel)]="projectDesc"
-          placeholder="e.g. Clinic records, billing & inventory management" />
-      </div>
-
-      <!-- 4. In-Project Administrator Details -->
-      <div class="form-section-title full-width">
-        <i class="pi pi-shield"></i>
-        <span>In-Project Admin Credentials</span>
-      </div>
-
-      <div class="form-group half-width">
-        <label class="form-label">Admin Username</label>
-        <input
-          type="text"
-          pInputText
-          class="p-inputtext-sm w-full font-mono"
-          [(ngModel)]="adminUsername"
-          placeholder="admin" />
-      </div>
-
-      <div class="form-group half-width">
-        <label class="form-label">
-          Admin Password
-          <span class="optional-hint">(Optional)</span>
-        </label>
-        <p-password
-          [(ngModel)]="adminPassword"
-          [toggleMask]="true"
-          [feedback]="false"
-          styleClass="w-full p-inputtext-sm"
-          placeholder="Defaults to 'admin' if left empty">
-        </p-password>
-      </div>
-
-      <!-- 5. Appearance: Color Accent & Icon -->
-      <div class="form-section-title full-width">
-        <i class="pi pi-palette"></i>
-        <span>Theme Accent & Icon</span>
-      </div>
-
-      <div class="form-group full-width">
-        <label class="form-label">Color Accent:</label>
-        <div class="color-palette">
-          <button
-            type="button"
-            *ngFor="let c of colorPresets"
-            class="color-dot"
-            [style.background-color]="c"
-            [class.active]="selectedColor === c"
-            (click)="selectedColor = c">
-            <i class="pi pi-check check-mark" *ngIf="selectedColor === c"></i>
-          </button>
-        </div>
-      </div>
-
-      <div class="form-group full-width">
-        <label class="form-label">Icon:</label>
-        <div class="icon-selector">
-          <button
-            type="button"
-            *ngFor="let opt of iconPresets"
-            class="icon-btn"
-            [class.active]="selectedIcon === opt.icon"
-            (click)="selectedIcon = opt.icon"
-            [title]="opt.label">
-            <i [class]="opt.icon"></i>
-          </button>
-        </div>
-      </div>
-    </div>
   </div>
 
   <ng-template pTemplate="footer">
@@ -274,7 +419,7 @@
         *ngIf="!showConsole"
         pButton
         type="button"
-        [label]="activeMode === 'upload' ? 'Attach & Launch' : 'Create & Open Project'"
+        [label]="submitButtonLabel"
         icon="pi pi-arrow-right"
         iconPos="right"
         class="p-button-primary p-button-sm"

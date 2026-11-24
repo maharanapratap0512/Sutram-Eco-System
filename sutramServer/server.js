@@ -138,7 +138,7 @@ masterRouter.post('/projects/inspect-db', (req, res) => {
  * POST /api/_sutram/master/projects
  * Creates a brand new isolated project database or adopts an uploaded SQLite database
  */
-masterRouter.post('/projects', (req, res) => {
+masterRouter.post('/projects', async (req, res) => {
   try {
     const requestingUser = req.headers['x-master-user'] || req.body.createdBy;
     if (!requestingUser) {
@@ -154,13 +154,13 @@ masterRouter.post('/projects', (req, res) => {
       });
     }
 
-    const { name, description, password, username, color, icon, dbSource, tempFileKey } = req.body;
+    const { name, description, password, username, color, icon, dbSource, tempFileKey, db_type, mysql_config } = req.body;
     let tempDbFile = null;
     if (tempFileKey) {
       tempDbFile = path.resolve(projectManager.tempDir, tempFileKey);
     }
 
-    const result = projectManager.createProject({
+    const result = await projectManager.createProject({
       name,
       description,
       password: password || '',
@@ -169,7 +169,9 @@ masterRouter.post('/projects', (req, res) => {
       icon: icon || 'pi pi-folder',
       createdBy: requestingUser,
       dbSource: dbSource || 'blank',
-      tempDbFile
+      tempDbFile,
+      db_type: db_type || (dbSource === 'mysql' ? 'mysql' : 'sqlite'),
+      mysql_config
     });
 
     res.json({
@@ -178,6 +180,42 @@ masterRouter.post('/projects', (req, res) => {
       result: result.project,
       logs: result.logs || []
     });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/_sutram/master/projects/mysql/databases
+ * Auto-discovers available user databases on MySQL server
+ */
+masterRouter.post('/projects/mysql/databases', async (req, res) => {
+  try {
+    const { MySQLIntrospector } = require('../packages/sutramcore-mysql');
+    const { host, port, user, password } = req.body;
+    const databases = await MySQLIntrospector.listDatabases({ host, port, user, password });
+    res.json({ success: true, count: databases.length, result: databases });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/_sutram/master/projects/mysql/inspect
+ * Pre-flight schema inspection for a candidate MySQL database
+ */
+masterRouter.post('/projects/mysql/inspect', async (req, res) => {
+  try {
+    const { MySQLAdapter, MySQLIntrospector } = require('../packages/sutramcore-mysql');
+    const { host, port, user, password, database } = req.body;
+    const adapter = new MySQLAdapter({ host, port, user, password, database });
+    await adapter.connect();
+    try {
+      const report = await MySQLIntrospector.introspect(adapter, database);
+      res.json({ success: true, result: report });
+    } finally {
+      await adapter.close();
+    }
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
   }
@@ -214,11 +252,12 @@ masterRouter.put('/projects/:slug', (req, res) => {
 
 /**
  * DELETE /api/_sutram/master/projects/:slug
- * Archives / soft-deletes a project
+ * Archives / soft-deletes a project with optional zero-trace database purge
  */
-masterRouter.delete('/projects/:slug', (req, res) => {
+masterRouter.delete('/projects/:slug', async (req, res) => {
   try {
-    const result = projectManager.deleteProject(req.params.slug);
+    const purge = req.query.purge === 'true' || req.body?.purge === true;
+    const result = await projectManager.deleteProject(req.params.slug, purge);
     res.json(result);
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });

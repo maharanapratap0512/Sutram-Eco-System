@@ -1,6 +1,7 @@
 import { Component, Input, Output, EventEmitter, ChangeDetectorRef, OnChanges, SimpleChanges } from '@angular/core';
 import { ProjectContextService } from '../../services/project-context.service';
-import { ProjectItem, DbInspectionReport } from '../../models/project.model';
+import { ProjectItem, DbInspectionReport, MySqlDatabaseItem } from '../../models/project.model';
+import { Subject, debounceTime } from 'rxjs';
 
 @Component({
   selector: 'app-create-project-modal',
@@ -9,11 +10,11 @@ import { ProjectItem, DbInspectionReport } from '../../models/project.model';
 })
 export class CreateProjectModalComponent implements OnChanges {
   @Input() visible: boolean = false;
-  @Input() initialMode: 'blank' | 'upload' = 'blank';
+  @Input() initialMode: 'blank' | 'upload' | 'mysql' = 'blank';
   @Output() visibleChange = new EventEmitter<boolean>();
   @Output() projectCreated = new EventEmitter<ProjectItem>();
 
-  public activeMode: 'blank' | 'upload' = 'blank';
+  // ── Project Identity & Appearance (Top Section) ────────────────
   public projectName: string = '';
   public projectDesc: string = '';
   public adminUsername: string = 'admin';
@@ -22,15 +23,31 @@ export class CreateProjectModalComponent implements OnChanges {
   public selectedIcon: string = 'pi pi-folder';
 
   public isCreating: boolean = false;
-  public isUploading: boolean = false;
   public errorMessage: string = '';
 
-  // Upload & Inspection state
+  // ── SQLite File Upload State ───────────────────────────────────
+  public isUploading: boolean = false;
   public tempFileKey: string = '';
   public uploadedFileName: string = '';
-  public inspectionReport: DbInspectionReport | null = null;
+  public sqliteInspectionReport: DbInspectionReport | null = null;
 
-  // Real-time Command Log Console state
+  // ── MySQL Server Connection & Clone State ──────────────────────
+  public mysqlHost: string = 'localhost';
+  public mysqlPort: number = 3306;
+  public mysqlUser: string = 'root';
+  public mysqlPass: string = '';
+  public selectedDatabase: string = '';
+  public mysqlIsNewDb: boolean = false;
+  public mysqlClone: boolean = false;
+  public mysqlClonedDbName: string = '';
+  public isFetchingDatabases: boolean = false;
+  public isInspectingMysql: boolean = false;
+  public availableDatabases: MySqlDatabaseItem[] = [];
+  public databaseOptions: Array<{ label: string; value: string; isSutram?: boolean; count?: number }> = [];
+  public mysqlInspectionReport: DbInspectionReport | null = null;
+  private mysqlCredsChange$ = new Subject<void>();
+
+  // ── Real-time Engine Console State ─────────────────────────────
   public showConsole: boolean = false;
   public commandLogs: string[] = [];
   public createdProject: ProjectItem | null = null;
@@ -59,17 +76,40 @@ export class CreateProjectModalComponent implements OnChanges {
   constructor(
     private projectContext: ProjectContextService,
     private cdr: ChangeDetectorRef
-  ) {}
+  ) {
+    this.mysqlCredsChange$.pipe(
+      debounceTime(400)
+    ).subscribe(() => {
+      this.fetchMySQLDatabases();
+    });
+  }
 
   ngOnChanges(changes: SimpleChanges): void {
-    if (changes['initialMode'] && this.initialMode) {
-      this.activeMode = this.initialMode;
-    }
     if (changes['visible'] && this.visible) {
-      if (this.initialMode) {
-        this.activeMode = this.initialMode;
+      if (this.initialMode === 'mysql') {
+        this.fetchMySQLDatabases();
       }
     }
+  }
+
+  // ── Reactive Mode & Exclusion Getters ──────────────────────────
+
+  /** SQLite file is selected and ready */
+  public get isSqliteSelected(): boolean {
+    return !!this.tempFileKey;
+  }
+
+  /** MySQL server box is being configured / selected */
+  public get isMySqlActive(): boolean {
+    if (this.isSqliteSelected) return false;
+    return !!(this.selectedDatabase || this.mysqlPass || (this.availableDatabases && this.availableDatabases.length > 0));
+  }
+
+  /** Resolved engine mode */
+  public get resolvedMode(): 'blank' | 'upload' | 'mysql' {
+    if (this.tempFileKey) return 'upload';
+    if (this.selectedDatabase && (this.mysqlHost || this.mysqlUser)) return 'mysql';
+    return 'blank';
   }
 
   public get calculatedSlug(): string {
@@ -82,23 +122,115 @@ export class CreateProjectModalComponent implements OnChanges {
   }
 
   public get calculatedDbFile(): string {
+    if (this.resolvedMode === 'mysql') {
+      const db = this.mysqlClone ? (this.mysqlClonedDbName || `${this.selectedDatabase}_copy`) : this.selectedDatabase;
+      return db ? `mysql://${db}` : '';
+    }
     const s = this.calculatedSlug;
     return s ? `${s}.db` : '';
   }
 
-  public switchMode(mode: 'blank' | 'upload'): void {
-    this.activeMode = mode;
+  public get submitButtonLabel(): string {
+    if (this.resolvedMode === 'upload') return 'Attach & Open Project';
+    if (this.resolvedMode === 'mysql') {
+      if (this.mysqlClone) return 'Clone & Open Project';
+      return this.mysqlIsNewDb ? 'Create MySQL Project' : 'Connect & Open Project';
+    }
+    return 'Create & Open Project';
+  }
+
+  // ── MySQL Methods ──────────────────────────────────────────────
+
+  public onMySQLCredsInput(): void {
+    this.mysqlCredsChange$.next();
+  }
+
+  public fetchMySQLDatabases(): void {
+    if (!this.mysqlHost || !this.mysqlUser) return;
+    this.isFetchingDatabases = true;
     this.errorMessage = '';
+    this.cdr.markForCheck();
+
+    this.projectContext.listMySqlDatabases({
+      host: this.mysqlHost.trim(),
+      port: Number(this.mysqlPort || 3306),
+      user: this.mysqlUser.trim(),
+      password: this.mysqlPass
+    }).subscribe({
+      next: (res) => {
+        this.isFetchingDatabases = false;
+        if (res && res.success && Array.isArray(res.result)) {
+          this.availableDatabases = res.result;
+          this.databaseOptions = res.result.map(db => ({
+            label: `${db.name} (${db.isSutram ? 'Sutram DB' : db.tableCount + ' tables'})`,
+            value: db.name,
+            isSutram: db.isSutram,
+            count: db.tableCount
+          }));
+        }
+        this.cdr.markForCheck();
+      },
+      error: (err) => {
+        this.isFetchingDatabases = false;
+        console.warn('[MySQL Auto-Discovery notice]:', err?.error?.error || err?.message);
+        this.cdr.markForCheck();
+      }
+    });
+  }
+
+  public onDatabaseSelected(event: any): void {
+    const val = typeof event === 'string' ? event : (event?.value || event?.target?.value || this.selectedDatabase);
+    if (!val) return;
+    this.selectedDatabase = String(val).trim();
+
+    const existing = this.availableDatabases.find(d => d.name.toLowerCase() === this.selectedDatabase.toLowerCase());
+    this.mysqlIsNewDb = !existing;
+
+    if (existing) {
+      this.mysqlClonedDbName = `${this.selectedDatabase}_copy`;
+      this.isInspectingMysql = true;
+      this.projectContext.inspectMySqlDatabase({
+        host: this.mysqlHost.trim(),
+        port: Number(this.mysqlPort || 3306),
+        user: this.mysqlUser.trim(),
+        password: this.mysqlPass,
+        database: this.selectedDatabase
+      }).subscribe({
+        next: (res) => {
+          this.isInspectingMysql = false;
+          if (res && res.success && res.result) {
+            this.mysqlInspectionReport = res.result;
+          }
+          this.cdr.markForCheck();
+        },
+        error: () => {
+          this.isInspectingMysql = false;
+          this.cdr.markForCheck();
+        }
+      });
+    } else {
+      this.mysqlClone = false;
+      this.mysqlClonedDbName = '';
+      this.mysqlInspectionReport = null;
+    }
+
+    if (!this.projectName || !this.projectName.trim()) {
+      this.projectName = this.selectedDatabase.replace(/[_\-]+/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+    }
+
     this.cdr.markForCheck();
   }
 
-  public formatFileSize(bytes?: number): string {
-    if (!bytes || bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  public resetMySqlConfig(): void {
+    this.selectedDatabase = '';
+    this.mysqlPass = '';
+    this.mysqlClone = false;
+    this.mysqlClonedDbName = '';
+    this.mysqlInspectionReport = null;
+    this.cdr.markForCheck();
   }
+
+  // ── SQLite Methods ─────────────────────────────────────────────
 
   public onFileSelected(event: any): void {
     const file = event?.target?.files?.[0];
@@ -113,9 +245,8 @@ export class CreateProjectModalComponent implements OnChanges {
         this.isUploading = false;
         if (res && res.success) {
           this.tempFileKey = res.tempFileKey;
-          this.inspectionReport = res.inspection;
+          this.sqliteInspectionReport = res.inspection;
 
-          // Auto-suggest project name from filename if empty
           if (!this.projectName || !this.projectName.trim()) {
             const rawName = (res.originalName || file.name)
               .replace(/\.(db|sqlite|sqlite3)$/i, '')
@@ -139,12 +270,22 @@ export class CreateProjectModalComponent implements OnChanges {
   public resetFileSelection(inputEl?: HTMLInputElement): void {
     this.tempFileKey = '';
     this.uploadedFileName = '';
-    this.inspectionReport = null;
+    this.sqliteInspectionReport = null;
     if (inputEl) {
       inputEl.value = '';
     }
     this.cdr.markForCheck();
   }
+
+  public formatFileSize(bytes?: number): string {
+    if (!bytes || bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  }
+
+  // ── Modal Lifecycle & Submit ───────────────────────────────────
 
   public close(): void {
     this.visible = false;
@@ -153,7 +294,6 @@ export class CreateProjectModalComponent implements OnChanges {
   }
 
   public resetForm(): void {
-    this.activeMode = this.initialMode || 'blank';
     this.projectName = '';
     this.projectDesc = '';
     this.adminUsername = 'admin';
@@ -165,7 +305,8 @@ export class CreateProjectModalComponent implements OnChanges {
     this.isUploading = false;
     this.tempFileKey = '';
     this.uploadedFileName = '';
-    this.inspectionReport = null;
+    this.sqliteInspectionReport = null;
+    this.resetMySqlConfig();
     this.showConsole = false;
     this.commandLogs = [];
     this.createdProject = null;
@@ -185,37 +326,59 @@ export class CreateProjectModalComponent implements OnChanges {
       return;
     }
 
-    if (this.activeMode === 'upload' && !this.tempFileKey) {
-      this.errorMessage = 'Please select a valid SQLite database file (.db) first';
-      return;
-    }
-
     if (!this.projectName || !this.projectName.trim()) {
       this.errorMessage = 'Project name is required';
       return;
     }
 
-    // Password is now completely OPTIONAL (Rule: Defaults to 'admin' if empty)
-    const adminPass = this.adminPassword?.trim() || 'admin';
+    const mode = this.resolvedMode;
 
+    if (mode === 'mysql' && !this.selectedDatabase) {
+      this.errorMessage = 'Please select or type a MySQL database name';
+      return;
+    }
+
+    if (mode === 'mysql' && this.mysqlClone && (!this.mysqlClonedDbName || !this.mysqlClonedDbName.trim())) {
+      this.errorMessage = 'Please provide a target database name for the clone';
+      return;
+    }
+
+    const adminPass = this.adminPassword?.trim() || 'admin';
     this.isCreating = true;
     this.showConsole = true;
     this.createdProject = null;
+
+    let targetDb = this.selectedDatabase.trim();
+    if (mode === 'mysql' && this.mysqlClone && this.mysqlClonedDbName.trim()) {
+      targetDb = this.mysqlClonedDbName.trim();
+    }
+
     this.commandLogs = [
-      `[INIT] Launching ${this.activeMode === 'upload' ? 'SQLite Database Adoption' : 'Blank Project Initialization'}...`,
+      `[INIT] Launching ${mode === 'upload' ? 'SQLite Database Adoption' : (mode === 'mysql' ? (this.mysqlClone ? 'MySQL Database Clone & Setup' : 'MySQL Database Integration') : 'Blank Project Initialization')}...`,
       `[CONFIG] Project: "${this.projectName.trim()}" (Admin: ${this.adminUsername.trim() || 'admin'})`
     ];
     this.cdr.markForCheck();
 
-    const payload = {
+    const payload: any = {
       name: this.projectName.trim(),
       description: this.projectDesc.trim(),
       username: this.adminUsername.trim() || 'admin',
       password: adminPass,
       color: this.selectedColor,
-      icon: this.selectedIcon,
-      dbSource: this.activeMode,
-      tempFileKey: this.activeMode === 'upload' ? this.tempFileKey : undefined
+      icon: mode === 'mysql' ? (this.selectedIcon || 'pi pi-server') : this.selectedIcon,
+      dbSource: mode,
+      db_type: mode === 'mysql' ? 'mysql' : 'sqlite',
+      tempFileKey: mode === 'upload' ? this.tempFileKey : undefined,
+      mysql_config: mode === 'mysql' ? {
+        host: this.mysqlHost.trim(),
+        port: Number(this.mysqlPort || 3306),
+        user: this.mysqlUser.trim(),
+        password: this.mysqlPass,
+        database: targetDb,
+        create_if_missing: this.mysqlIsNewDb || this.mysqlClone,
+        clone: this.mysqlClone,
+        clone_source_db: this.mysqlClone ? this.selectedDatabase.trim() : undefined
+      } : undefined
     };
 
     this.projectContext.createProject(payload).subscribe({
@@ -223,7 +386,6 @@ export class CreateProjectModalComponent implements OnChanges {
         if (res && res.success && res.result) {
           const incomingLogs = res.logs || [];
           if (incomingLogs.length > 0) {
-            // Stream incoming logs smoothly
             let i = 0;
             const interval = setInterval(() => {
               if (i < incomingLogs.length) {

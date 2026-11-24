@@ -182,10 +182,13 @@ class Engine {
         if (this._mode === 'direct') {
             this._rebootstrapDirect();
         } else {
+            if (this._dialect === 'mysql') {
+                return this._rebootstrapManagedAsync();
+            }
             this._rebootstrapManaged();
         }
 
-        const count = Object.keys(this._schema).length;
+        const count = Object.keys(this._schema || {}).length;
         console.log(`[sutramEngine] Bootstrapped — ${count} table(s), mode: ${this._mode}`);
     }
 
@@ -243,6 +246,15 @@ class Engine {
         this.trigger.load();
         this.report.load();
         this.reminder.load();
+    }
+
+    async _rebootstrapManagedAsync() {
+        const { MySQLSutram } = require('sutramcore-mysql');
+        const builder = new BootstrapBuilder(this._adapter);
+        this._schema = await builder.buildAsync();
+        this._sutram = new MySQLSutram({ adapter: this._adapter, schema: this._schema });
+        await this._sutram.connect();
+        this._tableCache = {};
     }
 
     // ─────────────────────────────────────────────────────────
@@ -526,10 +538,56 @@ class Engine {
     // TRANSACTIONS
     // ─────────────────────────────────────────────────────────
 
-    transaction(fn) { return this.db.transaction(fn)(); }
-    begin() { this.db.prepare('BEGIN').run(); }
-    commit() { this.db.prepare('COMMIT').run(); }
-    rollback() { this.db.prepare('ROLLBACK').run(); }
+    transaction(fn) {
+        if (this._sutram && typeof this._sutram.transaction === 'function') {
+            return this._sutram.transaction(fn);
+        }
+        return this.db.transaction(fn)();
+    }
+    async begin() {
+        if (this._sutram && typeof this._sutram.begin === 'function') {
+            return await this._sutram.begin();
+        }
+        if (this.db) this.db.prepare('BEGIN').run();
+    }
+    async commit() {
+        if (this._sutram && typeof this._sutram.commit === 'function') {
+            return await this._sutram.commit();
+        }
+        if (this.db) this.db.prepare('COMMIT').run();
+    }
+    async rollback() {
+        if (this._sutram && typeof this._sutram.rollback === 'function') {
+            return await this._sutram.rollback();
+        }
+        if (this.db) this.db.prepare('ROLLBACK').run();
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // ZERO-TRACE PURGE & INTROSPECTION
+    // ─────────────────────────────────────────────────────────
+
+    async purgeSutram() {
+        if (this._sutram && typeof this._sutram.purgeSutram === 'function') {
+            return await this._sutram.purgeSutram();
+        }
+        if (this.db) {
+            const { SQLiteIntrospector } = require('sutramcore');
+            return SQLiteIntrospector.purgeSutram(this.db);
+        }
+        throw new Error('[sutramEngine] No active database connection to purge.');
+    }
+
+    async introspect() {
+        if (this._sutram && typeof this._sutram.introspect === 'function') {
+            return await this._sutram.introspect();
+        }
+        if (this.db) {
+            const { SQLiteIntrospector } = require('sutramcore');
+            return SQLiteIntrospector.introspect(this.db);
+        }
+        return null;
+    }
 
     // ─────────────────────────────────────────────────────────
     // UI CONFIG

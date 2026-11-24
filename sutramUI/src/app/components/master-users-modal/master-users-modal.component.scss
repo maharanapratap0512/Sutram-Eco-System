@@ -55,22 +55,6 @@
         font-size: 0.78rem;
         color: var(--erp-text-muted, #64748b);
       }
-
-      .role-pill {
-        font-size: 0.65rem;
-        font-weight: 700;
-        padding: 0.1rem 0.45rem;
-        border-radius: 4px;
-        background: rgba(99, 102, 241, 0.12);
-        color: var(--erp-primary, #6366f1);
-        border: 1px solid rgba(99, 102, 241, 0.25);
-
-        &.badge-super {
-          background: rgba(16, 185, 129, 0.12);
-          color: #10b981;
-          border-color: rgba(16, 185, 129, 0.3);
-        }
-      }
     }
   }
 }
@@ -89,15 +73,6 @@
       font-weight: 700;
       font-size: 0.95rem;
       color: var(--erp-text, #0f172a);
-    }
-
-    .user-count-badge {
-      font-size: 0.72rem;
-      font-weight: 700;
-      padding: 0.15rem 0.5rem;
-      border-radius: 12px;
-      background: rgba(99, 102, 241, 0.1);
-      color: var(--erp-primary, #6366f1);
     }
   }
 
@@ -231,28 +206,6 @@
     }
   }
 
-  .role-badge {
-    padding: 0.15rem 0.45rem;
-    border-radius: 4px;
-    font-size: 0.68rem;
-    font-weight: 700;
-    background: var(--erp-surface, #ffffff);
-    border: 1px solid var(--erp-surface-border, #e2e8f0);
-    display: inline-block;
-
-    &.badge-super {
-      background: rgba(16, 185, 129, 0.1);
-      color: #10b981;
-      border-color: rgba(16, 185, 129, 0.3);
-    }
-
-    &.badge-admin {
-      background: rgba(99, 102, 241, 0.1);
-      color: #6366f1;
-      border-color: rgba(99, 102, 241, 0.3);
-    }
-  }
-
   .perm-toggle-btn {
     padding: 0.15rem 0.45rem;
     font-size: 0.72rem;
@@ -281,28 +234,6 @@
     }
   }
 
-  .full-access-text {
-    font-size: 0.72rem;
-    font-weight: 600;
-    color: #10b981;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-  }
-
-  .active-user-badge {
-    font-size: 0.72rem;
-    font-weight: 700;
-    color: #10b981;
-    background: rgba(16, 185, 129, 0.12);
-    border: 1px solid rgba(16, 185, 129, 0.3);
-    padding: 0.18rem 0.5rem;
-    border-radius: 4px;
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-  }
-
   .switch-btn {
     padding: 0.18rem 0.5rem;
     font-size: 0.72rem;
@@ -328,16 +259,6 @@
         font-size: 0.88rem;
         color: var(--erp-text, #0f172a);
       }
-    }
-
-    .badge {
-      font-size: 0.65rem;
-      font-weight: 700;
-      color: #10b981;
-      background: rgba(16, 185, 129, 0.12);
-      border: 1px solid rgba(16, 185, 129, 0.3);
-      padding: 0.15rem 0.45rem;
-      border-radius: 4px;
     }
   }
 
@@ -412,18 +333,6 @@
           font-size: 0.72rem;
           color: var(--erp-text-muted, #64748b);
         }
-      }
-
-      .super-access-pill {
-        font-size: 0.68rem;
-        font-weight: 700;
-        color: #10b981;
-        background: rgba(16, 185, 129, 0.1);
-        padding: 0.12rem 0.45rem;
-        border-radius: 4px;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
       }
     }
   }

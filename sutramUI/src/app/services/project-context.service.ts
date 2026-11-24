@@ -8,7 +8,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { BehaviorSubject, Observable, map, tap, catchError, of, throwError } from 'rxjs';
-import { ProjectItem, MasterUser, InProjectUser, ProjectCreatePayload, ProjectMember, DbInspectionReport } from '../models/project.model';
+import { ProjectItem, MasterUser, InProjectUser, ProjectCreatePayload, ProjectMember, DbInspectionReport, MySqlDatabaseItem } from '../models/project.model';
 
 @Injectable({
   providedIn: 'root'
@@ -294,10 +294,24 @@ export class ProjectContextService {
   }
 
   /**
-   * Archives / Deletes a project
+   * Auto-discovers databases on a MySQL server
    */
-  public deleteProject(slug: string): Observable<{ success: boolean; message?: string }> {
-    return this.http.delete<{ success: boolean; message?: string }>(`/api/_sutram/master/projects/${slug}`).pipe(
+  public listMySqlDatabases(config: { host: string; port?: number; user: string; password?: string }): Observable<{ success: boolean; result: MySqlDatabaseItem[] }> {
+    return this.http.post<{ success: boolean; result: MySqlDatabaseItem[] }>('/api/_sutram/master/projects/mysql/databases', config);
+  }
+
+  /**
+   * Pre-flight schema inspection of a target MySQL database
+   */
+  public inspectMySqlDatabase(config: { host: string; port?: number; user: string; password?: string; database: string }): Observable<{ success: boolean; result: DbInspectionReport }> {
+    return this.http.post<{ success: boolean; result: DbInspectionReport }>('/api/_sutram/master/projects/mysql/inspect', config);
+  }
+
+  /**
+   * Archives / Deletes a project, optionally running a zero-trace purge of Sutram metadata
+   */
+  public deleteProject(slug: string, purge: boolean = false): Observable<{ success: boolean; message?: string }> {
+    return this.http.delete<{ success: boolean; message?: string }>(`/api/_sutram/master/projects/${slug}?purge=${purge}`).pipe(
       tap(res => {
         if (res && res.success) {
           if (this.activeProject?.project_slug === slug) {

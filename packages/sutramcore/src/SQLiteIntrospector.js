@@ -120,6 +120,43 @@ class SQLiteIntrospector {
       tables
     };
   }
+
+  /**
+   * Completely purges all Sutram system tables (sys_*) leaving the SQLite database spotless.
+   * @param {import('better-sqlite3').Database} db
+   * @returns {{ success: boolean, purgedCount: number, purgedTables: string[] }}
+   */
+  static purgeSutram(db) {
+    if (!db || typeof db.prepare !== 'function') {
+      throw new Error('[SQLiteIntrospector] A valid better-sqlite3 instance is required.');
+    }
+
+    const sysRows = db.prepare(`
+      SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'sys_%'
+    `).all();
+
+    const purgedTables = [];
+    if (sysRows.length === 0) {
+      return { success: true, purgedCount: 0, purgedTables: [] };
+    }
+
+    db.pragma('foreign_keys = OFF');
+    try {
+      for (const row of sysRows) {
+        db.prepare(`DROP TABLE IF EXISTS "${row.name}"`).run();
+        purgedTables.push(row.name);
+      }
+    } finally {
+      db.pragma('foreign_keys = ON');
+    }
+
+    console.log(`🧹 [SQLiteIntrospector] Successfully purged ${purgedTables.length} Sutram system table(s).`);
+    return {
+      success: true,
+      purgedCount: purgedTables.length,
+      purgedTables
+    };
+  }
 }
 
 module.exports = SQLiteIntrospector;

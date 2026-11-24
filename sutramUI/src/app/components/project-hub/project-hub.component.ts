@@ -161,10 +161,24 @@ export class ProjectHubComponent implements OnInit, OnDestroy {
 
   public deleteProject(p: ProjectItem, event?: Event): void {
     if (event) event.stopPropagation();
-    if (!confirm(`Archive project "${p.project_name}" (${p.project_slug})?`)) {
-      return;
+    let purge = false;
+    if (p.db_type === 'mysql') {
+      const confirmDelete = confirm(`Remove project "${p.project_name}" (${p.project_slug}) from Sutram?`);
+      if (!confirmDelete) return;
+      let parsedConfig: any = null;
+      if (typeof p.db_config === 'string') {
+        try { parsedConfig = JSON.parse(p.db_config); } catch {}
+      } else if (p.db_config && typeof p.db_config === 'object') {
+        parsedConfig = p.db_config;
+      }
+      const targetDb = p.mysql_database || parsedConfig?.database || p.project_slug;
+      purge = confirm(`Clean-up Database?\n\nDo you also want to PURGE all Sutram metadata (sys_* tables) from the MySQL database "${targetDb}" so zero evidence of Sutram remains?`);
+    } else {
+      if (!confirm(`Archive project "${p.project_name}" (${p.project_slug})?`)) {
+        return;
+      }
     }
-    this.projectContext.deleteProject(p.project_slug).subscribe({
+    this.projectContext.deleteProject(p.project_slug, purge).subscribe({
       next: (res) => {
         if (res && res.success) {
           this.loadProjects();

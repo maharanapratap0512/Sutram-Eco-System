@@ -20,9 +20,7 @@
         <div class="bar-name-row">
           <span class="bar-name">{{ projectContext.activeMasterUser.display_name || projectContext.activeMasterUser.username }}</span>
           <span class="bar-login font-mono">@{{ projectContext.activeMasterUser.username }}</span>
-          <span class="role-pill" [class.badge-super]="projectContext.activeMasterUser.role === 'superadmin'" [class.badge-admin]="projectContext.activeMasterUser.role === 'admin'">
-            {{ projectContext.activeMasterUser.role | uppercase }}
-          </span>
+          <p-tag [severity]="projectContext.activeMasterUser.role === 'superadmin' ? 'danger' : 'info'" [value]="projectContext.activeMasterUser.role | uppercase"></p-tag>
         </div>
       </div>
     </div>
@@ -32,7 +30,7 @@
       <div class="toolbar-left">
         <i class="pi pi-users me-2 text-primary"></i>
         <span class="toolbar-title">System Users</span>
-        <span class="user-count-badge ms-2">{{ masterUsers.length }}</span>
+        <p-badge [value]="masterUsers.length" severity="info" class="ms-2"></p-badge>
       </div>
 
       <button
@@ -125,9 +123,7 @@
                 </div>
               </td>
               <td>
-                <span class="role-badge" [class.badge-super]="u.role === 'superadmin'" [class.badge-admin]="u.role === 'admin'">
-                  {{ u.role | uppercase }}
-                </span>
+                <p-tag [severity]="u.role === 'superadmin' ? 'danger' : (u.role === 'admin' ? 'info' : 'secondary')" [value]="u.role | uppercase"></p-tag>
               </td>
               <td>
                 <button
@@ -142,17 +138,16 @@
                   <i class="pi" [ngClass]="u.can_create_project === 1 ? 'pi-check-circle' : 'pi-ban'"></i>
                   <span>{{ u.can_create_project === 1 ? 'Allowed' : 'Blocked' }}</span>
                 </button>
-                <span *ngIf="u.role === 'superadmin'" class="full-access-text">
-                  <i class="pi pi-shield"></i> Full Access
-                </span>
+                <p-tag *ngIf="u.role === 'superadmin'" icon="pi pi-shield" severity="danger" value="Full Access"></p-tag>
               </td>
               <td style="text-align: center;">
-                <span
-                  class="active-user-badge"
+                <p-tag
                   *ngIf="projectContext.activeMasterUser?.username === u.username"
+                  icon="pi pi-check"
+                  severity="success"
+                  value="Active"
                   title="Currently active user">
-                  <i class="pi pi-check"></i> Active
-                </span>
+                </p-tag>
                 <button
                   *ngIf="projectContext.activeMasterUser?.username !== u.username"
                   pButton
@@ -179,9 +174,7 @@
             </span>
           </div>
 
-          <span class="badge font-mono" *ngIf="selectedUser.role === 'superadmin' || selectedUser.username === 'admin'">
-            ✓ All Projects
-          </span>
+          <p-tag *ngIf="selectedUser.role === 'superadmin' || selectedUser.username === 'admin'" icon="pi pi-check" severity="success" value="All Projects"></p-tag>
         </div>
 
         <!-- Superadmin Explanation & Full Project View -->
@@ -203,9 +196,7 @@
                 <span class="proj-title">{{ p.project_name }}</span>
                 <span class="proj-slug font-mono">({{ p.project_slug }}.db)</span>
               </div>
-              <span class="super-access-pill">
-                <i class="pi pi-check-circle"></i> Full Access
-              </span>
+              <p-tag icon="pi pi-check-circle" severity="success" value="Full Access"></p-tag>
             </div>
           </div>
         </ng-container>

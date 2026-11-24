@@ -165,6 +165,26 @@ class Sutram {
     //   const rows = sewa.prepare(`SELECT * FROM ...`).all();
 
     prepare(sql) { return this.db.prepare(sql); }
+
+    query(sql, params = []) {
+        return this.db.prepare(sql).all(params);
+    }
+
+    queryOne(sql, params = []) {
+        return this.db.prepare(sql).get(params);
+    }
+
+    run(sql, params = []) {
+        return this.db.prepare(sql).run(params);
+    }
+
+    introspect() {
+        return SQLiteIntrospector.introspect(this.db);
+    }
+
+    purgeSutram() {
+        return SQLiteIntrospector.purgeSutram(this.db);
+    }
 }
 
 module.exports = { Sutram, col, ColBuilder, defineTable, defineView, SQLiteIntrospector };

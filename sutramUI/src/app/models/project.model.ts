@@ -24,6 +24,9 @@ export interface ProjectItem {
   is_cached?: boolean;
   members_count?: number;
   access_role?: 'owner' | 'member' | 'viewer';
+  db_type?: 'sqlite' | 'mysql';
+  db_config?: string | any;
+  mysql_database?: string;
 }
 
 export interface MasterUser {
@@ -66,8 +69,25 @@ export interface ProjectCreatePayload {
   color?: string;
   icon?: string;
   createdBy?: string;
-  dbSource?: 'blank' | 'upload';
+  dbSource?: 'blank' | 'upload' | 'mysql';
   tempFileKey?: string;
+  db_type?: 'sqlite' | 'mysql';
+  mysql_config?: {
+    host: string;
+    port?: number;
+    user: string;
+    password?: string;
+    database: string;
+    create_if_missing?: boolean;
+    clone?: boolean;
+    clone_source_db?: string;
+  };
+}
+
+export interface MySqlDatabaseItem {
+  name: string;
+  isSutram: boolean;
+  tableCount: number;
 }
 
 export interface DbInspectionReport {

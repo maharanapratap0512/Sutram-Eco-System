@@ -93,6 +93,14 @@ class ProjectManager {
       this.masterDb.prepare(`ALTER TABLE sys_master_user ADD COLUMN can_create_project INTEGER DEFAULT 1`).run();
     } catch (e) {}
 
+    try {
+      this.masterDb.prepare(`ALTER TABLE sys_project ADD COLUMN db_type TEXT DEFAULT 'sqlite'`).run();
+    } catch (e) {}
+
+    try {
+      this.masterDb.prepare(`ALTER TABLE sys_project ADD COLUMN db_config TEXT`).run();
+    } catch (e) {}
+
     // Seed default master superadmin if table is empty
     const userCount = this.masterDb.prepare(`SELECT COUNT(*) as count FROM sys_master_user`).get()?.count || 0;
     if (userCount === 0) {
@@ -315,6 +323,52 @@ class ProjectManager {
       return null;
     }
 
+    // ── Handle MySQL Projects ─────────────────────────────────
+    if (project.db_type === 'mysql') {
+      const mysqlConfig = project.db_config ? JSON.parse(project.db_config) : {};
+      const { MySQLSutram, MySQLIntrospector } = require('../../packages/sutramcore-mysql');
+
+      console.log(`⚡ [ProjectManager] Connecting to MySQL project "${project.project_name}" (${project.project_slug})...`);
+
+      const sutram = new MySQLSutram({
+        host: mysqlConfig.host || 'localhost',
+        port: Number(mysqlConfig.port || 3306),
+        user: mysqlConfig.user || 'root',
+        password: mysqlConfig.password || '',
+        database: mysqlConfig.database || project.db_file,
+        schema: {}
+      });
+
+      const engine = new SutramEngine({ sutram });
+      sutram.connect().then(async () => {
+        try {
+          const introspected = await MySQLIntrospector.introspect(sutram.adapter, mysqlConfig.database || project.db_file);
+          const adopter = new DatabaseAdopter(sutram.adapter);
+          await adopter.adoptAsync(introspected, {
+            username: 'admin',
+            displayName: `${project.project_name} Administrator`
+          });
+          engine.init();
+        } catch (err) {
+          console.warn('⚠️ [ProjectManager] MySQL sync warning:', err.message);
+        }
+      }).catch(connErr => {
+        console.error(`❌ [ProjectManager] Failed to connect to MySQL for "${project.project_slug}":`, connErr.message);
+      });
+
+      const excel = new SutramExcel(engine);
+      this._syncExcelRegistrations(engine, excel, true);
+
+      const instance = {
+        project,
+        engine,
+        excel,
+        lastUsed: Date.now()
+      };
+      this.pool.set(project.project_slug, instance);
+      return instance;
+    }
+
     // Ensure DB path exists (resolved portably)
     const resolvedDbPath = this.resolveProjectDbPath(project);
     const dbDir = path.dirname(resolvedDbPath);
@@ -410,7 +464,9 @@ class ProjectManager {
     icon = 'pi pi-folder',
     createdBy = 'admin',
     dbSource = 'blank',
-    tempDbFile = null
+    tempDbFile = null,
+    db_type = 'sqlite',
+    mysql_config = null
   }) {
     if (!name || !String(name).trim()) {
       throw new Error('Project name is required');
@@ -428,12 +484,116 @@ class ProjectManager {
     }
     slug = candidateSlug;
 
-    const dbFilename = `${slug}.db`;
-    const targetDbPath = path.resolve(this.projectsDir, dbFilename);
     const cleanAdminUser = String(username || 'admin').trim();
     const cleanAdminPass = password && String(password).trim() ? String(password).trim() : 'admin';
-
     let adopterLogs = [];
+
+    // ── MySQL Project Creation / Adoption ──────────────────────
+    if (db_type === 'mysql' || dbSource === 'mysql' || mysql_config) {
+      return (async () => {
+        const config = mysql_config || {};
+        const { MySQLAdapter, MySQLIntrospector, MySQLSutram } = require('../../packages/sutramcore-mysql');
+
+        const targetHost = config.host || 'localhost';
+        const targetPort = Number(config.port || 3306);
+        const targetUser = config.user || 'root';
+        const targetPass = config.password || '';
+        const targetDb = config.database || slug;
+
+        // If requested to clone an existing database on MySQL server
+        if (config.clone && config.clone_source_db) {
+          const sourceDb = config.clone_source_db;
+          adopterLogs.push(`[CLONE] Cloning MySQL database "${sourceDb}" into "${targetDb}"...`);
+          try {
+            const rootAdapter = new MySQLAdapter({ host: targetHost, port: targetPort, user: targetUser, password: targetPass, database: 'mysql' });
+            await rootAdapter.connect();
+            const cloneResult = await MySQLIntrospector.cloneDatabase(rootAdapter, sourceDb, targetDb);
+            await rootAdapter.close();
+            adopterLogs.push(`[CLONE] Successfully cloned ${cloneResult.clonedTables} table(s) into \`${targetDb}\`.`);
+          } catch (cloneErr) {
+            console.error('[ProjectManager] Clone DB error:', cloneErr.message);
+            throw new Error(`Failed to clone database "${sourceDb}" to "${targetDb}": ${cloneErr.message}`);
+          }
+        } else if (config.create_if_missing) {
+          try {
+            const rootAdapter = new MySQLAdapter({ host: targetHost, port: targetPort, user: targetUser, password: targetPass, database: 'mysql' });
+            await rootAdapter.connect();
+            await rootAdapter.run(`CREATE DATABASE IF NOT EXISTS \`${targetDb}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+            await rootAdapter.close();
+            adopterLogs.push(`[INIT] Verified/Created MySQL database: \`${targetDb}\``);
+          } catch (createErr) {
+            console.warn('[ProjectManager] Create DB notice:', createErr.message);
+          }
+        }
+
+        // Connect to target database
+        adopterLogs.push(`[CONNECT] Connecting to MySQL database \`${targetDb}\` on ${targetHost}:${targetPort}...`);
+        const sutram = new MySQLSutram({ host: targetHost, port: targetPort, user: targetUser, password: targetPass, database: targetDb, schema: {} });
+        await sutram.connect();
+
+        // Introspect and Adopt
+        const introspected = await MySQLIntrospector.introspect(sutram.adapter, targetDb);
+        const adopter = new DatabaseAdopter(sutram.adapter);
+        await adopter.adoptAsync(introspected, {
+          username: cleanAdminUser,
+          password: cleanAdminPass,
+          displayName: `${cleanName} Administrator`
+        }, (step, msg) => {
+          adopterLogs.push(`[${step}] ${msg}`);
+        });
+
+        // Initialize Engine & Excel
+        const engine = new SutramEngine({ sutram }).init();
+        const excel = new SutramExcel(engine);
+        this._syncExcelRegistrations(engine, excel, true);
+
+        // Register in Master DB
+        const serializedConfig = JSON.stringify({
+          host: targetHost,
+          port: targetPort,
+          user: targetUser,
+          password: targetPass,
+          database: targetDb
+        });
+
+        const insertProj = this.masterDb.prepare(`
+          INSERT INTO sys_project (
+            project_name, project_slug, db_file, db_path, description, color, icon, owner_username, db_type, db_config, active
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'mysql', ?, 1)
+        `).run(
+          cleanName,
+          slug,
+          targetDb,
+          `mysql://${targetHost}:${targetPort}/${targetDb}`,
+          description ? String(description).trim() : '',
+          color || '#3b82f6',
+          icon || 'pi pi-server',
+          createdBy || 'admin',
+          serializedConfig
+        );
+
+        const projectId = insertProj.lastInsertRowid;
+        const masterUser = this.masterDb.prepare(`SELECT _id FROM sys_master_user WHERE username = ?`).get(createdBy || 'admin');
+        if (masterUser) {
+          this.masterDb.prepare(`
+            INSERT OR IGNORE INTO sys_project_access (user_id, project_id, access_role)
+            VALUES (?, ?, 'owner')
+          `).run(masterUser._id, projectId);
+        }
+
+        const newProject = this.masterDb.prepare(`SELECT * FROM sys_project WHERE _id = ?`).get(projectId);
+        const instance = { project: newProject, engine, excel, lastUsed: Date.now() };
+        this.pool.set(slug, instance);
+
+        adopterLogs.push(`[SUCCESS] MySQL Project "${cleanName}" (${targetDb}) successfully initialized.`);
+        return {
+          success: true,
+          project: newProject,
+          logs: adopterLogs,
+          message: `MySQL Project "${cleanName}" created and ready.`
+        };
+      })();
+    }
 
     if (dbSource === 'upload' && tempDbFile) {
       if (!fs.existsSync(tempDbFile)) {
@@ -568,18 +728,38 @@ class ProjectManager {
   }
 
   /**
-   * Soft-deletes a project from active list
+   * Soft-deletes a project from active list, optionally running a zero-trace purge of Sutram metadata
    */
-  deleteProject(slug) {
+  async deleteProject(slug, purge = false) {
     const existing = this.masterDb.prepare(`SELECT * FROM sys_project WHERE project_slug = ?`).get(slug);
     if (!existing) {
       throw new Error(`Project "${slug}" not found`);
     }
 
+    let purgedCount = 0;
+    if (purge) {
+      try {
+        const instance = this.getProject(slug);
+        if (instance?.engine && typeof instance.engine.purgeSutram === 'function') {
+          const res = await instance.engine.purgeSutram();
+          purgedCount = res?.purgedCount || 0;
+        }
+      } catch (purgeErr) {
+        console.warn(`⚠️ [ProjectManager] Error during purge for "${slug}":`, purgeErr.message);
+      }
+    }
+
     this.masterDb.prepare(`UPDATE sys_project SET active = 0, updated_at = datetime('now', 'localtime') WHERE _id = ?`).run(existing._id);
     this.pool.delete(slug);
 
-    return { success: true, message: `Project "${existing.project_name}" archived.` };
+    return {
+      success: true,
+      purged: purge,
+      purgedCount,
+      message: purge
+        ? `Project "${existing.project_name}" deleted and ${purgedCount} Sutram metadata tables cleanly purged from database.`
+        : `Project "${existing.project_name}" archived.`
+    };
   }
 
   /**
