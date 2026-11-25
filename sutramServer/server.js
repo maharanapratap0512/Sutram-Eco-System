@@ -31,13 +31,161 @@ const projectManager = new ProjectManager({
   dbPath: config.dbPath
 });
 
-// Helper to resolve active project instance from request query, headers, or server active project
+function extractBearerOrHeader(req, headerName) {
+  const direct = req?.headers?.[headerName];
+  if (direct) return String(direct).trim();
+  const auth = req?.headers?.authorization;
+  if (auth && /^Bearer\s+/i.test(auth)) {
+    return auth.replace(/^Bearer\s+/i, '').trim();
+  }
+  return '';
+}
+
+function getRequestProjectSlug(req, activeProj = null) {
+  return (
+    activeProj?.project?.project_slug ||
+    req?.query?.project ||
+    req?.headers?.['x-project-slug'] ||
+    req?.headers?.['x-project-id'] ||
+    projectManager.activeProjectSlug ||
+    projectManager.getDefaultProjectSlug() ||
+    ''
+  );
+}
+
+/**
+ * Verifies signed Master Workspace token (or valid LAN share token when allowed).
+ */
+function requireMasterAuth({ allowLan = false } = {}) {
+  return (req, res, next) => {
+    const masterToken = extractBearerOrHeader(req, 'x-master-token');
+    if (masterToken) {
+      const claims = projectManager.sessionManager.verifyToken(masterToken, 'master');
+      if (claims) {
+        const masterUser = projectManager.getMasterUserById(claims.uid);
+        if (masterUser) {
+          req.masterUser = masterUser;
+          return next();
+        }
+      }
+    }
+
+    if (allowLan) {
+      const lanToken = extractBearerOrHeader(req, 'x-lan-token');
+      if (lanToken) {
+        const lanClaims = sutramLan.security.verifyToken(lanToken);
+        if (lanClaims) {
+          req.lanSession = lanClaims;
+          return next();
+        }
+      }
+      const targetSlug = req.params?.slug || req.headers['x-project-slug'] || req.query?.project;
+      const beaconProj = targetSlug && sutramLan?.beacon?.projects?.get(String(targetSlug));
+      if (beaconProj && beaconProj.authType === 'none') {
+        req.lanSession = { projectId: String(targetSlug), role: 'guest', authType: 'none' };
+        return next();
+      }
+    }
+
+    return res.status(401).json({
+      success: false,
+      code: 'MASTER_AUTH_REQUIRED',
+      error: 'Authentication required: please sign in to Sutram Workspace.'
+    });
+  };
+}
+
+/**
+ * Verifies signed per-project session token (x-project-token) AND live sys_user record.
+ * Never trusts spoofable username headers or UI-only guards.
+ */
+async function requireProjectAuth(req, res, next) {
+  try {
+    const projectToken = extractBearerOrHeader(req, 'x-project-token');
+    if (!projectToken) {
+      return res.status(401).json({
+        success: false,
+        code: 'PROJECT_AUTH_REQUIRED',
+        error: 'Project login required. Please sign in to open this workspace.'
+      });
+    }
+
+    const claims = projectManager.sessionManager.verifyToken(projectToken, 'project');
+    if (!claims) {
+      return res.status(401).json({
+        success: false,
+        code: 'PROJECT_TOKEN_INVALID',
+        error: 'Project session expired or invalid. Please sign in again.'
+      });
+    }
+
+    const requestedSlug = req?.query?.project || req?.headers?.['x-project-slug'] || req?.headers?.['x-project-id'] || claims.slug;
+    const activeProjectInfo = await projectManager.getProject(requestedSlug);
+    if (!activeProjectInfo || activeProjectInfo.project?.project_slug !== claims.slug) {
+      return res.status(401).json({
+        success: false,
+        code: 'PROJECT_TOKEN_MISMATCH',
+        error: 'Project session token does not match the active project.'
+      });
+    }
+
+    const { engine } = activeProjectInfo;
+    const liveUser = engine.auth ? await engine.auth.getUserByIdOrUsername(claims.uid) : null;
+    if (!liveUser || liveUser.active === 0) {
+      return res.status(401).json({
+        success: false,
+        code: 'PROJECT_USER_INVALID',
+        error: 'User account is inactive or missing in this project.'
+      });
+    }
+
+    const rights = engine.auth ? await engine.auth.getUserRights(liveUser._id) : [];
+    req.activeProjectInfo = activeProjectInfo;
+    req.projectUser = liveUser;
+    req.projectRights = rights;
+    req.unmaskedCols = new Set();
+
+    const unmaskHeader = req.headers['x-unmask-tokens'] || req.headers['x-unmask-token'];
+    if (unmaskHeader) {
+      const tokenList = String(unmaskHeader).split(',').map(s => s.trim()).filter(Boolean);
+      for (const tok of tokenList) {
+        const uClaims = projectManager.sessionManager.verifyToken(tok, 'unmask');
+        if (uClaims && uClaims.slug === claims.slug && Number(uClaims.uid) === Number(liveUser._id) && uClaims.column) {
+          req.unmaskedCols.add(uClaims.column);
+        }
+      }
+    }
+
+    if (projectManager.activeProjectSlug !== activeProjectInfo.project.project_slug) {
+      projectManager.activeProjectSlug = activeProjectInfo.project.project_slug;
+    }
+
+    return next();
+  } catch (err) {
+    return res.status(401).json({
+      success: false,
+      code: 'PROJECT_AUTH_ERROR',
+      error: err.message
+    });
+  }
+}
+
+function requireProjectAdmin(req, res, next) {
+  if (!req.projectUser || req.projectUser.role !== 'admin') {
+    return res.status(403).json({
+      success: false,
+      error: 'Administrator privileges are required for this action.'
+    });
+  }
+  return next();
+}
+
+// Helper to resolve active project instance from request (prefers authenticated context)
 async function getActiveProject(req) {
-  const slug = req?.query?.project
-    || req?.headers?.['x-project-slug']
-    || req?.headers?.['x-project-id']
-    || projectManager.activeProjectSlug
-    || projectManager.getDefaultProjectSlug();
+  if (req?.activeProjectInfo) {
+    return req.activeProjectInfo;
+  }
+  const slug = getRequestProjectSlug(req);
   const instance = await projectManager.getProject(slug);
   if (!instance) {
     throw new Error(`Project "${slug || 'default'}" not found`);
@@ -73,14 +221,23 @@ if (fs.existsSync(uiDistPath)) {
 // ─────────────────────────────────────────────────────────────
 const masterRouter = express.Router();
 
+const masterAuthStrict = requireMasterAuth({ allowLan: false });
+
+/**
+ * GET /api/_sutram/master/me
+ * Verifies master token & returns fresh user profile
+ */
+masterRouter.get('/me', masterAuthStrict, (req, res) => {
+  res.json({ success: true, result: req.masterUser });
+});
+
 /**
  * GET /api/_sutram/master/projects
- * List all projects accessible to the specified master user (or all if admin)
+ * List all projects accessible to the authenticated master user
  */
-masterRouter.get('/projects', (req, res) => {
+masterRouter.get('/projects', masterAuthStrict, (req, res) => {
   try {
-    const username = req.query.username || null;
-    const projects = projectManager.listProjects(username);
+    const projects = projectManager.listProjects(req.masterUser.username);
     res.json({ success: true, count: projects.length, result: projects });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -98,7 +255,7 @@ const tempUpload = multer({
  * POST /api/_sutram/master/projects/upload-db-temp
  * Uploads a temporary SQLite file and runs instant pre-flight inspection
  */
-masterRouter.post('/projects/upload-db-temp', tempUpload.single('dbFile'), (req, res) => {
+masterRouter.post('/projects/upload-db-temp', masterAuthStrict, tempUpload.single('dbFile'), (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ success: false, error: 'No database file provided.' });
@@ -126,7 +283,7 @@ masterRouter.post('/projects/upload-db-temp', tempUpload.single('dbFile'), (req,
  * POST /api/_sutram/master/projects/inspect-db
  * Runs pre-flight inspection on a given path or temp file
  */
-masterRouter.post('/projects/inspect-db', (req, res) => {
+masterRouter.post('/projects/inspect-db', masterAuthStrict, (req, res) => {
   try {
     const { tempFileKey, filePath } = req.body;
     const targetPath = tempFileKey
@@ -144,15 +301,9 @@ masterRouter.post('/projects/inspect-db', (req, res) => {
  * POST /api/_sutram/master/projects
  * Creates a brand new isolated project database or adopts an uploaded SQLite database
  */
-masterRouter.post('/projects', async (req, res) => {
+masterRouter.post('/projects', masterAuthStrict, async (req, res) => {
   try {
-    const requestingUser = req.headers['x-master-user'] || req.body.createdBy;
-    if (!requestingUser) {
-      return res.status(401).json({
-        success: false,
-        error: 'लॉगिन आवश्यक है (Authentication required: x-master-user header or createdBy missing)'
-      });
-    }
+    const requestingUser = req.masterUser.username;
     if (!projectManager.canUserCreateProject(requestingUser)) {
       return res.status(403).json({
         success: false,
@@ -169,7 +320,7 @@ masterRouter.post('/projects', async (req, res) => {
     const result = await projectManager.createProject({
       name,
       description,
-      password: password || '',
+      password: password !== undefined && password !== null ? String(password) : '',
       username: username || 'admin',
       color: color || '#10b981',
       icon: icon || 'pi pi-folder',
@@ -195,7 +346,7 @@ masterRouter.post('/projects', async (req, res) => {
  * POST /api/_sutram/master/projects/mysql/databases
  * Auto-discovers available user databases on MySQL server
  */
-masterRouter.post('/projects/mysql/databases', async (req, res) => {
+masterRouter.post('/projects/mysql/databases', masterAuthStrict, async (req, res) => {
   try {
     const { MySQLIntrospector } = require('../packages/sutramcore-mysql');
     const { host, port, user, password } = req.body;
@@ -210,7 +361,7 @@ masterRouter.post('/projects/mysql/databases', async (req, res) => {
  * POST /api/_sutram/master/projects/mysql/inspect
  * Pre-flight schema inspection for a candidate MySQL database
  */
-masterRouter.post('/projects/mysql/inspect', async (req, res) => {
+masterRouter.post('/projects/mysql/inspect', masterAuthStrict, async (req, res) => {
   try {
     const { MySQLAdapter, MySQLIntrospector } = require('../packages/sutramcore-mysql');
     const { host, port, user, password, database } = req.body;
@@ -231,8 +382,11 @@ masterRouter.post('/projects/mysql/inspect', async (req, res) => {
  * GET /api/_sutram/master/projects/:slug
  * Retrieves project details
  */
-masterRouter.get('/projects/:slug', async (req, res) => {
+masterRouter.get('/projects/:slug', masterAuthStrict, async (req, res) => {
   try {
+    if (!projectManager.userHasProjectAccess(req.masterUser._id, req.params.slug)) {
+      return res.status(403).json({ success: false, error: 'Access denied to this project' });
+    }
     const instance = await projectManager.getProject(req.params.slug);
     if (!instance) {
       return res.status(404).json({ success: false, error: `Project "${req.params.slug}" not found` });
@@ -247,8 +401,11 @@ masterRouter.get('/projects/:slug', async (req, res) => {
  * PUT /api/_sutram/master/projects/:slug
  * Updates project metadata (name, description, color, icon)
  */
-masterRouter.put('/projects/:slug', (req, res) => {
+masterRouter.put('/projects/:slug', masterAuthStrict, (req, res) => {
   try {
+    if (!projectManager.userHasProjectAccess(req.masterUser._id, req.params.slug)) {
+      return res.status(403).json({ success: false, error: 'Access denied to this project' });
+    }
     const updated = projectManager.updateProject(req.params.slug, req.body);
     res.json({ success: true, message: 'Project updated successfully', result: updated });
   } catch (err) {
@@ -260,8 +417,11 @@ masterRouter.put('/projects/:slug', (req, res) => {
  * DELETE /api/_sutram/master/projects/:slug
  * Archives / soft-deletes a project with optional zero-trace database purge
  */
-masterRouter.delete('/projects/:slug', async (req, res) => {
+masterRouter.delete('/projects/:slug', masterAuthStrict, async (req, res) => {
   try {
+    if (req.masterUser.role !== 'superadmin' && req.masterUser.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Only administrators can delete projects' });
+    }
     const purge = req.query.purge === 'true' || req.body?.purge === true;
     const result = await projectManager.deleteProject(req.params.slug, purge);
     res.json(result);
@@ -274,8 +434,11 @@ masterRouter.delete('/projects/:slug', async (req, res) => {
  * POST /api/_sutram/master/projects/switch/:slug
  * Instantly switches server active database connection to this project
  */
-masterRouter.post('/projects/switch/:slug', async (req, res) => {
+masterRouter.post('/projects/switch/:slug', requireMasterAuth({ allowLan: true }), async (req, res) => {
   try {
+    if (req.masterUser && !projectManager.userHasProjectAccess(req.masterUser._id, req.params.slug)) {
+      return res.status(403).json({ success: false, error: 'Access denied to this project' });
+    }
     const instance = await projectManager.setActiveProject(req.params.slug);
     res.json({
       success: true,
@@ -291,7 +454,7 @@ masterRouter.post('/projects/switch/:slug', async (req, res) => {
  * GET /api/_sutram/master/projects/active
  * Returns current active project info
  */
-masterRouter.get('/projects/active', async (req, res) => {
+masterRouter.get('/projects/active', masterAuthStrict, async (req, res) => {
   try {
     const instance = await projectManager.getActiveProject();
     res.json({
@@ -307,8 +470,11 @@ masterRouter.get('/projects/active', async (req, res) => {
  * GET /api/_sutram/master/users
  * Returns list of master workspace users
  */
-masterRouter.get('/users', (req, res) => {
+masterRouter.get('/users', masterAuthStrict, (req, res) => {
   try {
+    if (req.masterUser.role !== 'superadmin' && req.masterUser.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Admin access required' });
+    }
     const users = projectManager.getMasterUsers();
     res.json({ success: true, count: users.length, result: users });
   } catch (err) {
@@ -320,8 +486,11 @@ masterRouter.get('/users', (req, res) => {
  * GET /api/_sutram/master/users/:userId/projects
  * Returns list of projects accessible to a specific master user
  */
-masterRouter.get('/users/:userId/projects', (req, res) => {
+masterRouter.get('/users/:userId/projects', masterAuthStrict, (req, res) => {
   try {
+    if (req.masterUser.role !== 'superadmin' && req.masterUser.role !== 'admin' && Number(req.masterUser._id) !== Number(req.params.userId)) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
     const access = projectManager.getUserProjects(req.params.userId);
     res.json({ success: true, count: access.length, result: access });
   } catch (err) {
@@ -331,10 +500,13 @@ masterRouter.get('/users/:userId/projects', (req, res) => {
 
 /**
  * POST /api/_sutram/master/users
- * Creates a new master workspace user
+ * Creates a new master workspace user (supports blank password)
  */
-masterRouter.post('/users', (req, res) => {
+masterRouter.post('/users', masterAuthStrict, (req, res) => {
   try {
+    if (req.masterUser.role !== 'superadmin' && req.masterUser.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Admin access required' });
+    }
     const user = projectManager.createMasterUser(req.body);
     res.json({ success: true, message: `Master user "${user.username}" created`, result: user });
   } catch (err) {
@@ -346,8 +518,11 @@ masterRouter.post('/users', (req, res) => {
  * PUT /api/_sutram/master/users/:userId
  * Updates master user profile, role, or permissions
  */
-masterRouter.put('/users/:userId', (req, res) => {
+masterRouter.put('/users/:userId', masterAuthStrict, (req, res) => {
   try {
+    if (req.masterUser.role !== 'superadmin' && req.masterUser.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Admin access required' });
+    }
     const updated = projectManager.updateMasterUser(req.params.userId, req.body);
     res.json({ success: true, message: 'User updated successfully', result: updated });
   } catch (err) {
@@ -357,13 +532,13 @@ masterRouter.put('/users/:userId', (req, res) => {
 
 /**
  * POST /api/_sutram/master/login
- * Validates master user credentials for Workspace Hub
+ * Validates master user credentials for Workspace Hub (blank password supported)
  */
 masterRouter.post('/login', (req, res) => {
   try {
-    const { username, password } = req.body;
-    if (!username || !password) {
-      return res.status(400).json({ success: false, error: 'यूज़रनेम और पासवर्ड आवश्यक हैं (Username and password are required)' });
+    const { username, password = '' } = req.body || {};
+    if (!username || !String(username).trim()) {
+      return res.status(400).json({ success: false, error: 'यूज़रनेम आवश्यक है (Username is required)' });
     }
     const user = projectManager.verifyMasterUser(username, password);
     if (!user) {
@@ -377,10 +552,12 @@ masterRouter.post('/login', (req, res) => {
 
 /**
  * GET /api/_sutram/master/projects/:slug/access
- * Returns users with access to a project
  */
-masterRouter.get('/projects/:slug/access', async (req, res) => {
+masterRouter.get('/projects/:slug/access', masterAuthStrict, async (req, res) => {
   try {
+    if (req.masterUser.role !== 'superadmin' && req.masterUser.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Admin access required' });
+    }
     const instance = await projectManager.getProject(req.params.slug);
     if (!instance) return res.status(404).json({ success: false, error: 'Project not found' });
     const members = projectManager.getProjectAccess(instance.project._id);
@@ -392,10 +569,12 @@ masterRouter.get('/projects/:slug/access', async (req, res) => {
 
 /**
  * POST /api/_sutram/master/projects/:slug/access
- * Grants project access to a master user
  */
-masterRouter.post('/projects/:slug/access', async (req, res) => {
+masterRouter.post('/projects/:slug/access', masterAuthStrict, async (req, res) => {
   try {
+    if (req.masterUser.role !== 'superadmin' && req.masterUser.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Admin access required' });
+    }
     const instance = await projectManager.getProject(req.params.slug);
     if (!instance) return res.status(404).json({ success: false, error: 'Project not found' });
     const { userId, accessRole } = req.body;
@@ -408,10 +587,12 @@ masterRouter.post('/projects/:slug/access', async (req, res) => {
 
 /**
  * DELETE /api/_sutram/master/projects/:slug/access/:userId
- * Revokes project access from a master user
  */
-masterRouter.delete('/projects/:slug/access/:userId', async (req, res) => {
+masterRouter.delete('/projects/:slug/access/:userId', masterAuthStrict, async (req, res) => {
   try {
+    if (req.masterUser.role !== 'superadmin' && req.masterUser.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Admin access required' });
+    }
     const instance = await projectManager.getProject(req.params.slug);
     if (!instance) return res.status(404).json({ success: false, error: 'Project not found' });
     projectManager.revokeProjectAccess(req.params.userId, instance.project._id);
@@ -431,11 +612,19 @@ app.use('/_sutram/master', masterRouter);
 const schemaRouter = express.Router();
 const authRouter = express.Router();
 
+// Enforce authenticated project session on all schemaRouter endpoints (except /auth/login which requires Master/LAN auth)
+schemaRouter.use((req, res, next) => {
+  if (req.path === '/auth/login') {
+    return requireMasterAuth({ allowLan: true })(req, res, next);
+  }
+  return requireProjectAuth(req, res, next);
+});
+
 /**
  * POST /api/_sutram/schema/create-table
  * Dynamically creates a table in the active project database and updates sys_ tables
  */
-schemaRouter.post('/create-table', async (req, res) => {
+schemaRouter.post('/create-table', requireProjectAdmin, async (req, res) => {
   try {
     const activeProjectInfo = await getActiveProject(req);
     const { engine, excel } = activeProjectInfo;
@@ -542,7 +731,7 @@ schemaRouter.get('/table-detail/:tableName', async (req, res) => {
  * PUT /api/_sutram/schema/tables/:tableName
  * Updates an existing table using Core physical DDL
  */
-schemaRouter.put('/tables/:tableName', async (req, res) => {
+schemaRouter.put('/tables/:tableName', requireProjectAdmin, async (req, res) => {
   try {
     const { engine, excel } = await getActiveProject(req);
     const tableName = req.params.tableName;
@@ -576,7 +765,7 @@ schemaRouter.put('/tables/:tableName', async (req, res) => {
  * DELETE /api/_sutram/schema/tables/:tableName
  * Safely drops a user table and cleans up metadata & Excel registration
  */
-schemaRouter.delete('/tables/:tableName', async (req, res) => {
+schemaRouter.delete('/tables/:tableName', requireProjectAdmin, async (req, res) => {
   try {
     const { engine, excel } = await getActiveProject(req);
     const tableName = req.params.tableName;
@@ -603,7 +792,11 @@ schemaRouter.get('/tables', async (req, res) => {
   try {
     const { engine } = await getActiveProject(req);
     const tableNames = Object.keys(engine._schema || {})
-      .filter(t => !t.startsWith('sys_') && !t.startsWith('xls_') && !t.startsWith('sqlite_'));
+      .filter(t => !t.startsWith('sys_') && !t.startsWith('xls_') && !t.startsWith('sqlite_'))
+      .filter(t => {
+        if (!req.projectUser || !engine.auth) return true;
+        return engine.auth.getEffectiveRights(req.projectUser, t, req.projectRights || []).can_view;
+      });
     const tables = [];
     for (const t of tableNames) {
       const schema = engine._schema[t];
@@ -773,7 +966,7 @@ schemaRouter.get('/table-config/:table', async (req, res) => {
 /**
  * POST /api/_sutram/schema/table-config/:table
  */
-schemaRouter.post('/table-config/:table', async (req, res) => {
+schemaRouter.post('/table-config/:table', requireProjectAdmin, async (req, res) => {
   try {
     const { engine } = await getActiveProject(req);
     const tbl = req.params.table;
@@ -839,7 +1032,7 @@ schemaRouter.get('/triggers/:table', async (req, res) => {
 /**
  * POST /api/_sutram/schema/triggers
  */
-schemaRouter.post('/triggers', async (req, res) => {
+schemaRouter.post('/triggers', requireProjectAdmin, async (req, res) => {
   try {
     const { engine } = await getActiveProject(req);
     const def = req.body;
@@ -866,7 +1059,7 @@ schemaRouter.post('/triggers', async (req, res) => {
 /**
  * DELETE /api/_sutram/schema/triggers/:id
  */
-schemaRouter.delete('/triggers/:id', async (req, res) => {
+schemaRouter.delete('/triggers/:id', requireProjectAdmin, async (req, res) => {
   try {
     const { engine } = await getActiveProject(req);
     const id = req.params.id;
@@ -898,7 +1091,7 @@ schemaRouter.get('/ui-sutras/:table', async (req, res) => {
 /**
  * POST /api/_sutram/schema/ui-sutras/:table
  */
-schemaRouter.post('/ui-sutras/:table', async (req, res) => {
+schemaRouter.post('/ui-sutras/:table', requireProjectAdmin, async (req, res) => {
   try {
     const { engine } = await getActiveProject(req);
     const tbl = req.params.table;
@@ -911,236 +1104,114 @@ schemaRouter.post('/ui-sutras/:table', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// 5. In-Project Users & Author/Admin Roles (Project Database Level)
+// 5. In-Project Users & Author/Admin Roles (Delegated to Engine.auth)
 // ─────────────────────────────────────────────────────────────
 
-async function ensureUserColumns(engine) {
-  try {
-    const inspected = await engine.inspectTable('sys_user');
-    const hasOcr = (inspected.columns || []).some(c => c.name === 'can_ocr');
-    if (!hasOcr) {
-      try {
-        await engine.core.addColumn('sys_user', {
-          column_name: 'can_ocr',
-          col_type: 'boolean',
-          sql_type: 'TINYINT',
-          default_value: '1'
-        });
-      } catch {}
-    }
-
-    const row = await engine.queryOne(`SELECT COUNT(*) as count FROM sys_user`);
-    const userCount = row?.count || 0;
-    if (userCount === 0) {
-      await engine.run(
-        `INSERT INTO sys_user (username, password, display_name, role, active, can_ocr) VALUES ('admin', 'admin', 'Project Administrator', 'admin', 1, 1)`
-      );
-    }
-  } catch (err) {
-    console.warn('[ensureUserColumns] Warning:', err.message);
-  }
-}
-
-/**
- * GET /api/_sutram/schema/users
- */
-schemaRouter.get('/users', async (req, res) => {
+schemaRouter.get('/users', requireProjectAdmin, async (req, res) => {
   try {
     const { engine } = await getActiveProject(req);
-    await ensureUserColumns(engine);
-    const users = await engine.query(`SELECT _id, username, display_name, role, active, COALESCE(can_ocr, 1) as can_ocr, created_at, updated_at FROM sys_user ORDER BY _id ASC`);
+    const users = await engine.auth.listUsers();
     res.json({ success: true, result: users });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-/**
- * POST /api/_sutram/schema/users
- */
-schemaRouter.post('/users', async (req, res) => {
+schemaRouter.post('/users', requireProjectAdmin, async (req, res) => {
   try {
     const { engine } = await getActiveProject(req);
-    const { username, password, display_name, role = 'author', active = 1, can_ocr = 1 } = req.body;
-    if (!username || !password) {
-      return res.status(400).json({ success: false, error: 'Username and password are required' });
+    const { username, password = '', display_name, role = 'author', active = 1, can_ocr = 1, misc_settings } = req.body || {};
+    if (!username || !String(username).trim()) {
+      return res.status(400).json({ success: false, error: 'Username is required' });
     }
-    const cleanUser = String(username).trim();
-    const cleanPass = String(password).trim();
-    const cleanRole = role === 'admin' ? 'admin' : 'author';
-    const cleanOcr = (can_ocr === 0 || can_ocr === false) ? 0 : 1;
-    await ensureUserColumns(engine);
-
-    const info = await engine.run(`
-      INSERT INTO sys_user (username, password, display_name, role, active, can_ocr)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `, [cleanUser, cleanPass, display_name || cleanUser, cleanRole, active ? 1 : 0, cleanOcr]);
-
-    const newId = info.insertId ?? info.lastInsertRowid;
-    const newUser = await engine.queryOne(`SELECT _id, username, display_name, role, active, COALESCE(can_ocr, 1) as can_ocr, created_at, updated_at FROM sys_user WHERE _id = ?`, [newId]);
-    res.json({ success: true, message: `User "${cleanUser}" created successfully in project`, result: newUser });
+    const newUser = await engine.auth.createUser({
+      username,
+      password,
+      display_name,
+      role,
+      active,
+      can_ocr,
+      misc_settings
+    });
+    res.json({ success: true, message: `User "${newUser.username}" created successfully in project`, result: newUser });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(400).json({ success: false, error: err.message });
   }
 });
 
-/**
- * PUT /api/_sutram/schema/users/:id
- */
-schemaRouter.put('/users/:id', async (req, res) => {
+schemaRouter.put('/users/:id', requireProjectAdmin, async (req, res) => {
   try {
     const { engine } = await getActiveProject(req);
-    const id = req.params.id;
-    const { username, password, display_name, role, active, can_ocr } = req.body;
-    await ensureUserColumns(engine);
-
-    const existing = await engine.queryOne(`SELECT * FROM sys_user WHERE _id = ?`, [id]);
-    if (!existing) {
-      return res.status(404).json({ success: false, error: 'User not found in this project' });
-    }
-
-    const updatedUser = username ? String(username).trim() : existing.username;
-    const updatedPass = (password && String(password).trim()) ? String(password).trim() : existing.password;
-    const updatedDisp = display_name !== undefined ? display_name : existing.display_name;
-    const updatedRole = role ? (role === 'admin' ? 'admin' : 'author') : existing.role;
-    const updatedAct = active !== undefined ? (active ? 1 : 0) : existing.active;
-    const updatedOcr = can_ocr !== undefined ? ((can_ocr === 0 || can_ocr === false) ? 0 : 1) : (existing.can_ocr !== undefined ? existing.can_ocr : 1);
-
-    if (existing.role === 'admin' && updatedRole !== 'admin') {
-      const adminCount = (await engine.queryOne(`SELECT COUNT(*) as count FROM sys_user WHERE role = 'admin' AND active = 1`))?.count || 0;
-      if (adminCount <= 1) {
-        return res.status(400).json({ success: false, error: 'Cannot revoke admin role from the sole active administrator in this project' });
-      }
-    }
-
-    await engine.run(`
-      UPDATE sys_user
-      SET username = ?, password = ?, display_name = ?, role = ?, active = ?, can_ocr = ?, updated_at = ?
-      WHERE _id = ?
-    `, [updatedUser, updatedPass, updatedDisp, updatedRole, updatedAct, updatedOcr, nowTimestampStr(), id]);
-
-    const result = await engine.queryOne(`SELECT _id, username, display_name, role, active, COALESCE(can_ocr, 1) as can_ocr, created_at, updated_at FROM sys_user WHERE _id = ?`, [id]);
-    res.json({ success: true, message: `Project user updated successfully`, result });
+    const updated = await engine.auth.updateUser(req.params.id, req.body || {});
+    res.json({ success: true, message: 'Project user updated successfully', result: updated });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(err.statusCode || 400).json({ success: false, error: err.message });
   }
 });
 
-/**
- * DELETE /api/_sutram/schema/users/:id
- */
-schemaRouter.delete('/users/:id', async (req, res) => {
+schemaRouter.delete('/users/:id', requireProjectAdmin, async (req, res) => {
   try {
     const { engine } = await getActiveProject(req);
-    const id = req.params.id;
-
-    const existing = await engine.queryOne(`SELECT * FROM sys_user WHERE _id = ?`, [id]);
-    if (!existing) {
-      return res.status(404).json({ success: false, error: 'User not found in this project' });
-    }
-
-    if (existing.role === 'admin') {
-      const adminCount = (await engine.queryOne(`SELECT COUNT(*) as count FROM sys_user WHERE role = 'admin' AND active = 1`))?.count || 0;
-      if (adminCount <= 1) {
-        return res.status(400).json({ success: false, error: 'Cannot delete the sole administrator of this project' });
-      }
-    }
-
-    await engine.run(`DELETE FROM sys_user WHERE _id = ?`, [id]);
-    res.json({ success: true, message: `Project user "${existing.username}" deleted successfully` });
+    const deleted = await engine.auth.deleteUser(req.params.id);
+    res.json({ success: true, message: `Project user "${deleted.username}" deleted successfully` });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(err.statusCode || 400).json({ success: false, error: err.message });
   }
 });
 
-/**
- * GET /api/_sutram/schema/user-rights/:userId
- */
-schemaRouter.get('/user-rights/:userId', async (req, res) => {
+schemaRouter.get('/user-rights/:userId', requireProjectAdmin, async (req, res) => {
   try {
     const { engine } = await getActiveProject(req);
-    const userId = req.params.userId;
-    const rights = await engine.query(`SELECT * FROM sys_user_rights WHERE user_id = ?`, [userId]);
+    const rights = await engine.auth.getUserRights(req.params.userId);
     res.json({ success: true, result: rights });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-/**
- * POST /api/_sutram/schema/user-rights/:userId
- */
-schemaRouter.post('/user-rights/:userId', async (req, res) => {
+schemaRouter.post('/user-rights/:userId', requireProjectAdmin, async (req, res) => {
   try {
-    const { engine } = await getActiveProject(req);
-    const userId = req.params.userId;
-    const rights = Array.isArray(req.body.rights) ? req.body.rights : [];
-
-    const now = nowTimestampStr();
-    const needTx = !engine.inTransaction;
-    try {
-      if (needTx) await engine.begin();
-      for (const r of rights) {
-        await engine.upsert('sys_user_rights', ['user_id', 'table_name'], {
-          user_id: userId,
-          table_name: r.table_name,
-          can_view: r.can_view ? 1 : 0,
-          can_edit: r.can_edit ? 1 : 0,
-          can_delete: r.can_delete ? 1 : 0,
-          can_unmask: r.can_unmask ? 1 : 0,
-          updated_at: now
-        });
-      }
-      if (needTx) await engine.commit();
-    } catch (txErr) {
-      if (needTx && engine.inTransaction) await engine.rollback();
-      throw txErr;
-    }
-
-    res.json({ success: true, message: 'User rights updated successfully in project' });
+    const { engine, excel } = await getActiveProject(req);
+    const rights = Array.isArray(req.body?.rights) ? req.body.rights : [];
+    const saved = await engine.auth.setUserRights(req.params.userId, rights);
+    // Sync Excel registrations in case an owner user_id column was just added
+    try { await projectManager._syncExcelRegistrations(engine, excel, true); } catch {}
+    res.json({ success: true, message: 'User rights updated successfully in project', result: saved });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
 /**
- * In-Project Password and Column Security Handlers
+ * In-Project Password and Column Security Handlers (via Engine.auth)
  */
 async function handleVerifyUnmask(req, res) {
   try {
-    const { engine } = await getActiveProject(req);
-    const { userId, table, column, secret } = req.body;
-    if (!secret) return res.status(400).json({ success: false, error: 'Password or PIN required' });
-    const cleanSecret = String(secret).trim();
+    const activeInfo = await getActiveProject(req);
+    const { engine } = activeInfo;
+    const { table, column, secret = '' } = req.body || {};
 
-    let colSec = null;
-    if (table && column) {
-      try {
-        colSec = await engine.queryOne(`SELECT secret_hash FROM sys_column_security WHERE table_name = ? AND column_name = ?`, [table, column]);
-      } catch (e) {}
-    }
-
-    if (colSec && colSec.secret_hash && String(colSec.secret_hash).trim().length > 0) {
-      if (colSec.secret_hash === cleanSecret) {
-        return res.json({ success: true, authorized: true, method: 'column_pin' });
-      } else {
-        return res.status(401).json({ success: false, authorized: false, error: 'गलत पिन (विशेष कॉलम पिन अमान्य है)' });
+    if (table) {
+      const eff = engine.auth.getEffectiveRights(req.projectUser, table, req.projectRights || []);
+      if (req.projectUser.role !== 'admin' && !eff.can_unmask) {
+        return res.status(403).json({ success: false, authorized: false, error: 'You do not have can_unmask permission for this table.' });
       }
     }
 
-    const adminUser = await engine.queryOne(`SELECT * FROM sys_user WHERE role = 'admin' AND active = 1 AND password = ?`, [cleanSecret]);
-    if (adminUser) {
-      return res.json({ success: true, authorized: true, method: 'admin_password' });
+    const result = await engine.auth.verifyUnmask({
+      userId: req.projectUser?._id,
+      table,
+      column,
+      secret
+    });
+
+    if (!result.authorized) {
+      return res.status(401).json({ success: false, authorized: false, error: result.error });
     }
 
-    if (userId) {
-      const user = await engine.queryOne(`SELECT * FROM sys_user WHERE (_id = ? OR username = ?) AND active = 1 AND password = ?`, [userId, userId, cleanSecret]);
-      if (user) {
-        return res.json({ success: true, authorized: true, method: 'user_password' });
-      }
-    }
-
-    res.status(401).json({ success: false, authorized: false, error: 'गलत पासवर्ड (Invalid Admin Password)' });
+    const slug = activeInfo.project?.project_slug || getRequestProjectSlug(req, activeInfo);
+    const unmaskToken = projectManager.sessionManager.issueUnmaskToken(slug, req.projectUser._id, table, column);
+    return res.json({ success: true, authorized: true, method: result.method, unmaskToken });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -1149,70 +1220,56 @@ async function handleVerifyUnmask(req, res) {
 async function handleSetColumnSecurity(req, res) {
   try {
     const { engine } = await getActiveProject(req);
-    const { table, column, secret } = req.body;
-    if (!table || !column) return res.status(400).json({ success: false, error: 'Table and column required' });
-
-    if (!secret || !String(secret).trim()) {
-      await engine.run(`DELETE FROM sys_column_security WHERE table_name = ? AND column_name = ?`, [table, column]);
-      return res.json({ success: true, message: 'Column security PIN removed (admin password will be used)' });
-    }
-
-    await engine.upsert('sys_column_security', ['table_name', 'column_name'], {
-      table_name: table,
-      column_name: column,
-      secret_hash: String(secret).trim(),
-      updated_at: nowTimestampStr()
-    });
-
-    res.json({ success: true, message: 'Column security PIN saved successfully' });
+    const { table, column, secret } = req.body || {};
+    const result = await engine.auth.setColumnSecurity({ table, column, secret });
+    res.json({ success: true, message: result.message });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(400).json({ success: false, error: err.message });
   }
 }
 
-authRouter.post('/verify-unmask', handleVerifyUnmask);
-authRouter.post('/set-column-security', handleSetColumnSecurity);
+authRouter.post('/verify-unmask', requireProjectAuth, handleVerifyUnmask);
+authRouter.post('/set-column-security', requireProjectAuth, requireProjectAdmin, handleSetColumnSecurity);
 schemaRouter.post('/auth/verify-unmask', handleVerifyUnmask);
-schemaRouter.post('/auth/set-column-security', handleSetColumnSecurity);
+schemaRouter.post('/auth/set-column-security', requireProjectAdmin, handleSetColumnSecurity);
 
 /**
  * POST /api/_sutram/auth/login
+ * Validates in-project user (supports blank password) & issues signed project session token
  */
 async function handleProjectUserLogin(req, res) {
   try {
-    const { engine } = await getActiveProject(req);
-    const { username, password } = req.body;
-    if (!username || !password) {
-      return res.status(400).json({ success: false, error: 'Username and password are required' });
+    const activeInfo = await getActiveProject(req);
+    const slug = activeInfo.project?.project_slug || getRequestProjectSlug(req, activeInfo);
+
+    if (req.masterUser && !projectManager.userHasProjectAccess(req.masterUser._id, slug)) {
+      return res.status(403).json({ success: false, error: 'You do not have access to this project.' });
     }
-    const cleanUser = String(username).trim();
-    const cleanPass = String(password).trim();
-    await ensureUserColumns(engine);
+    if (req.lanSession && req.lanSession.projectId && req.lanSession.projectId !== slug) {
+      return res.status(403).json({ success: false, error: 'LAN token does not grant access to this project.' });
+    }
 
-    const user = await engine.queryOne(`
-      SELECT _id, username, password, display_name, role, active, COALESCE(can_ocr, 1) as can_ocr
-      FROM sys_user
-      WHERE (username = ? OR _id = ?) AND active = 1
-    `, [cleanUser, cleanUser]);
+    const { username, password = '' } = req.body || {};
+    if (!username || !String(username).trim()) {
+      return res.status(400).json({ success: false, error: 'यूज़रनेम आवश्यक है (Username is required)' });
+    }
 
-    if (!user || user.password !== cleanPass) {
+    const authRes = await activeInfo.engine.auth.verifyLogin(username, password);
+    if (!authRes) {
       return res.status(401).json({ success: false, error: 'अमान्य यूज़रनेम या पासवर्ड (Invalid username or password)' });
     }
 
-    const rights = await engine.query(`SELECT table_name, can_view, can_edit, can_delete, can_unmask FROM sys_user_rights WHERE user_id = ?`, [user._id]);
-
+    const projectToken = projectManager.sessionManager.issueProjectToken(slug, authRes.user);
     return res.json({
       success: true,
       result: {
         user: {
-          _id: user._id,
-          username: user.username,
-          display_name: user.display_name,
-          role: user.role,
-          active: user.active,
-          can_ocr: user.can_ocr === 1
+          ...authRes.user,
+          can_ocr: authRes.user.can_ocr === 1
         },
-        rights
+        rights: authRes.rights,
+        token: projectToken,
+        projectSlug: slug
       }
     });
   } catch (err) {
@@ -1222,40 +1279,19 @@ async function handleProjectUserLogin(req, res) {
 
 /**
  * GET /api/_sutram/auth/me
+ * Validates active project session token and returns live user + table rights
  */
 async function handleGetProjectUserMe(req, res) {
   try {
-    const { engine } = await getActiveProject(req);
-    const userParam = req.query.username || req.query.userId || req.headers['x-sutram-user'];
-    if (!userParam) {
-      return res.json({ success: true, result: null });
-    }
-    await ensureUserColumns(engine);
-
-    const user = await engine.queryOne(`
-      SELECT _id, username, display_name, role, active, COALESCE(can_ocr, 1) as can_ocr
-      FROM sys_user
-      WHERE (username = ? OR _id = ?) AND active = 1
-    `, [userParam, userParam]);
-
-    if (!user) {
-      return res.status(404).json({ success: false, error: 'User not found in project' });
-    }
-
-    const rights = await engine.query(`SELECT table_name, can_view, can_edit, can_delete, can_unmask FROM sys_user_rights WHERE user_id = ?`, [user._id]);
-
     res.json({
       success: true,
       result: {
         user: {
-          _id: user._id,
-          username: user.username,
-          display_name: user.display_name,
-          role: user.role,
-          active: user.active,
-          can_ocr: user.can_ocr === 1
+          ...req.projectUser,
+          can_ocr: req.projectUser.can_ocr === 1
         },
-        rights
+        rights: req.projectRights || [],
+        projectSlug: req.activeProjectInfo?.project?.project_slug
       }
     });
   } catch (err) {
@@ -1263,8 +1299,8 @@ async function handleGetProjectUserMe(req, res) {
   }
 }
 
-authRouter.post('/login', handleProjectUserLogin);
-authRouter.get('/me', handleGetProjectUserMe);
+authRouter.post('/login', requireMasterAuth({ allowLan: true }), handleProjectUserLogin);
+authRouter.get('/me', requireProjectAuth, handleGetProjectUserMe);
 schemaRouter.post('/auth/login', handleProjectUserLogin);
 schemaRouter.get('/auth/me', handleGetProjectUserMe);
 
@@ -1272,7 +1308,7 @@ schemaRouter.get('/auth/me', handleGetProjectUserMe);
  * POST /api/_sutram/seed-demo
  * Seeds starter tables in the active project database
  */
-schemaRouter.post('/seed-demo', async (req, res) => {
+schemaRouter.post('/seed-demo', requireProjectAdmin, async (req, res) => {
   try {
     const { engine, excel } = await getActiveProject(req);
     const existing = Object.keys(engine._schema || {}).filter(t => !t.startsWith('sys_') && !t.startsWith('xls_'));
@@ -1352,6 +1388,7 @@ app.use('/_sutram/auth', authRouter);
 // 6. Reminders & Smart Watchdog REST APIs (Project Scoped)
 // ─────────────────────────────────────────────────────────────
 const reminderRouter = express.Router();
+reminderRouter.use(requireProjectAuth);
 
 reminderRouter.get('/rules', async (req, res) => {
   try {
@@ -1363,7 +1400,7 @@ reminderRouter.get('/rules', async (req, res) => {
   }
 });
 
-reminderRouter.post('/rules', async (req, res) => {
+reminderRouter.post('/rules', requireProjectAdmin, async (req, res) => {
   try {
     const { engine } = await getActiveProject(req);
     const ruleId = await engine.reminder.createRule(req.body);
@@ -1374,7 +1411,7 @@ reminderRouter.post('/rules', async (req, res) => {
   }
 });
 
-reminderRouter.put('/rules/:id', async (req, res) => {
+reminderRouter.put('/rules/:id', requireProjectAdmin, async (req, res) => {
   try {
     const { engine } = await getActiveProject(req);
     await engine.reminder.updateRule(req.params.id, req.body);
@@ -1385,7 +1422,7 @@ reminderRouter.put('/rules/:id', async (req, res) => {
   }
 });
 
-reminderRouter.delete('/rules/:id', async (req, res) => {
+reminderRouter.delete('/rules/:id', requireProjectAdmin, async (req, res) => {
   try {
     const { engine } = await getActiveProject(req);
     const deleted = await engine.reminder.deleteRule(req.params.id);
@@ -1395,7 +1432,7 @@ reminderRouter.delete('/rules/:id', async (req, res) => {
   }
 });
 
-reminderRouter.post('/test', async (req, res) => {
+reminderRouter.post('/test', requireProjectAdmin, async (req, res) => {
   try {
     const { engine } = await getActiveProject(req);
     const preview = await engine.reminder.testRule(req.body);
@@ -1447,7 +1484,7 @@ reminderRouter.post('/snooze/:logId', async (req, res) => {
 reminderRouter.post('/dismiss/:logId', async (req, res) => {
   try {
     const { engine } = await getActiveProject(req);
-    const user = req.body?.user || 'admin';
+    const user = req.projectUser?.username || req.body?.user || 'admin';
     const reason = req.body?.reason || '';
     await engine.reminder.dismiss(req.params.logId, user, reason);
     res.json({ success: true, message: 'Alert dismissed successfully' });
@@ -1462,7 +1499,7 @@ app.use('/_sutram/reminders', reminderRouter);
 // ─────────────────────────────────────────────────────────────
 // 7. Dynamic Project SutramExcel Routing
 // ─────────────────────────────────────────────────────────────
-app.use(['/_sutram/excel', '/api/_sutram/excel', '/api/sutram/excel'], async (req, res, next) => {
+app.use(['/_sutram/excel', '/api/_sutram/excel', '/api/sutram/excel'], requireProjectAuth, async (req, res, next) => {
   try {
     const { excel } = await getActiveProject(req);
     return excel.router()(req, res, next);
@@ -1476,13 +1513,16 @@ app.use(['/_sutram/excel', '/api/_sutram/excel', '/api/sutram/excel'], async (re
 // ─────────────────────────────────────────────────────────────
 const { SutramVision } = require('../packages/sutramVision');
 const sutramVision = new SutramVision();
-app.use(['/_sutram/vision', '/api/_sutram/vision', '/api/sutram/vision'], async (req, res, next) => {
+app.use(['/_sutram/vision', '/api/_sutram/vision', '/api/sutram/vision'], requireProjectAuth, async (req, res, next) => {
   try {
     const { engine } = await getActiveProject(req);
+    if (req.projectUser && req.projectUser.role !== 'admin' && req.projectUser.can_ocr !== 1) {
+      return res.status(403).json({ success: false, error: 'AI Vision OCR permission is disabled for your user account.' });
+    }
     req.sutramEngine = engine;
     req.projectDb = engine.db || null;
   } catch (err) {
-    // If no active project in context, ignore
+    return res.status(500).json({ success: false, error: err.message });
   }
   return sutramVision.router()(req, res, next);
 });
@@ -1501,36 +1541,31 @@ app.use('/api', async (req, res, next) => {
   ) {
     return next();
   }
-  try {
-    const { engine } = await getActiveProject(req);
-    return engine.router()(req, res, next);
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+  return requireProjectAuth(req, res, async () => {
+    try {
+      const { engine } = await getActiveProject(req);
+      return engine.router()(req, res, next);
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
 });
 
 // ─────────────────────────────────────────────────────────────
 // 9. Root & Healthcheck (Serve Angular Single Page App on `/`)
 // ─────────────────────────────────────────────────────────────
 async function sendApiStatus(req, res) {
-  try {
-    const defaultInstance = await getActiveProject(req);
-    const tables = Object.keys(defaultInstance.engine._schema || {}).filter(t => !t.startsWith('sys_') && !t.startsWith('xls_'));
-    res.json({
-      app: 'Sutram Multi-Project Universal ERP Engine Platform',
-      status: 'online',
-      activeProject: defaultInstance.project?.project_slug || 'default',
-      activeTables: tables,
-      projectsCount: projectManager.listProjects().length,
-      frontend: fs.existsSync(path.join(uiDistPath, 'index.html')) ? 'Integrated SutramUI Production Bundle' : 'SutramUI Dev Server (port 4300)'
-    });
-  } catch (e) {
-    res.json({
-      app: 'Sutram Multi-Project Universal ERP Engine Platform',
-      status: 'online',
-      error: e.message
-    });
+  const masterToken = extractBearerOrHeader(req, 'x-master-token');
+  const validMaster = masterToken ? projectManager.sessionManager.verifyToken(masterToken, 'master') : null;
+  const payload = {
+    app: 'Sutram Multi-Project Universal ERP Engine Platform',
+    status: 'online',
+    frontend: fs.existsSync(path.join(uiDistPath, 'index.html')) ? 'Integrated SutramUI Production Bundle' : 'SutramUI Dev Server (port 4300)'
+  };
+  if (validMaster) {
+    payload.projectsCount = projectManager.listProjects(validMaster.username).length;
   }
+  res.json(payload);
 }
 
 app.get(['/api', '/api/status'], sendApiStatus);
@@ -1575,7 +1610,7 @@ const updateManager = new UpdateManager({
 const lanRouter = express.Router();
 
 // GET /api/_sutram/lan/status - Local node identity & active peers count
-lanRouter.get('/status', (req, res) => {
+lanRouter.get('/status', masterAuthStrict, (req, res) => {
   try {
     const nodeInfo = sutramLan.getNodeInfo();
     const peers = sutramLan.getPeers();
@@ -1586,7 +1621,7 @@ lanRouter.get('/status', (req, res) => {
 });
 
 // GET /api/_sutram/lan/peers - Discovered peers on local Wi-Fi / LAN
-lanRouter.get('/peers', (req, res) => {
+lanRouter.get('/peers', masterAuthStrict, (req, res) => {
   try {
     const peers = sutramLan.getPeers();
     res.json({ success: true, count: peers.length, result: peers });
@@ -1596,7 +1631,7 @@ lanRouter.get('/peers', (req, res) => {
 });
 
 // POST /api/_sutram/lan/share - Toggle project sharing on LAN
-lanRouter.post('/share', async (req, res) => {
+lanRouter.post('/share', masterAuthStrict, async (req, res) => {
   try {
     const { projectId, name, authType, pin, password, description } = req.body;
     if (!projectId) return res.status(400).json({ success: false, error: 'projectId is required' });
@@ -1627,7 +1662,7 @@ lanRouter.post('/share', async (req, res) => {
 });
 
 // POST /api/_sutram/lan/unshare - Stop sharing project on LAN
-lanRouter.post('/unshare', (req, res) => {
+lanRouter.post('/unshare', masterAuthStrict, (req, res) => {
   try {
     const { projectId } = req.body;
     if (!projectId) return res.status(400).json({ success: false, error: 'projectId is required' });
@@ -1671,6 +1706,12 @@ app.use('/api/_sutram/lan', lanRouter);
 // 9B. Application Zip Update APIs (Safe Replacement Engine)
 // ─────────────────────────────────────────────────────────────
 const updateRouter = express.Router();
+updateRouter.use(masterAuthStrict, (req, res, next) => {
+  if (req.masterUser.role !== 'superadmin' && req.masterUser.role !== 'admin') {
+    return res.status(403).json({ success: false, error: 'Superadmin/Admin privileges required for system updates.' });
+  }
+  return next();
+});
 
 // POST /api/_sutram/update/upload - Upload and apply update.zip
 updateRouter.post('/upload', tempUpload.single('updateZip'), async (req, res) => {
@@ -1758,4 +1799,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, server, projectManager, getActiveProject };
+module.exports = { app, server, projectManager, getActiveProject, sutramLan };

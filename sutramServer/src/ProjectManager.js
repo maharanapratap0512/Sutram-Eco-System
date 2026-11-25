@@ -16,9 +16,10 @@
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
-const { SQLiteIntrospector } = require('../../packages/sutramcore');
-const { SutramEngine, DatabaseAdopter } = require('../../packages/sutramEngine');
+const { Sutram, SQLiteIntrospector } = require('../../packages/sutramcore');
+const { SutramEngine, DatabaseAdopter, AuthManager } = require('../../packages/sutramEngine');
 const { SutramExcel } = require('../../packages/sutramExcel');
+const SessionManager = require('./SessionManager');
 
 class ProjectManager {
   constructor(config = {}) {
@@ -43,8 +44,9 @@ class ProjectManager {
     this.pool = new Map();
     this._loadingPromises = new Map();
     this.activeProjectSlug = null;
+    this.sessionManager = new SessionManager(this.dataDir);
 
-    // Initialize Master Registry DB
+    // Initialize Master Registry DB (via Core ORM)
     this._initMasterDb();
     this.activeProjectSlug = this.getDefaultProjectSlug();
   }
@@ -58,7 +60,7 @@ class ProjectManager {
     this.masterDb.pragma('foreign_keys = ON');
 
     // 1. Projects Registry
-    this.masterDb.prepare(`
+    this.masterDb.exec(`
       CREATE TABLE IF NOT EXISTS sys_project (
         _id            INTEGER PRIMARY KEY AUTOINCREMENT,
         project_name   TEXT NOT NULL,
@@ -70,13 +72,16 @@ class ProjectManager {
         icon           TEXT DEFAULT 'pi pi-folder',
         owner_username TEXT DEFAULT 'admin',
         active         INTEGER DEFAULT 1,
+        db_type        TEXT DEFAULT 'sqlite',
+        db_config      TEXT,
+        misc_settings  TEXT,
         created_at     TEXT DEFAULT (datetime('now', 'localtime')),
         updated_at     TEXT DEFAULT (datetime('now', 'localtime'))
       )
-    `).run();
+    `);
 
-    // 2. Master Workspace Users (Who can log in to Sutram Workspace Hub)
-    this.masterDb.prepare(`
+    // 2. Master Workspace Users
+    this.masterDb.exec(`
       CREATE TABLE IF NOT EXISTS sys_master_user (
         _id          INTEGER PRIMARY KEY AUTOINCREMENT,
         username     TEXT NOT NULL UNIQUE,
@@ -85,35 +90,24 @@ class ProjectManager {
         role         TEXT NOT NULL DEFAULT 'superadmin' CHECK(role IN ('superadmin', 'admin', 'user')),
         active       INTEGER DEFAULT 1,
         can_create_project INTEGER DEFAULT 1,
+        misc_settings TEXT,
         created_at   TEXT DEFAULT (datetime('now', 'localtime')),
         updated_at   TEXT DEFAULT (datetime('now', 'localtime'))
       )
-    `).run();
+    `);
 
-    try {
-      this.masterDb.prepare(`ALTER TABLE sys_master_user ADD COLUMN can_create_project INTEGER DEFAULT 1`).run();
-    } catch (e) {}
-
-    try {
-      this.masterDb.prepare(`ALTER TABLE sys_project ADD COLUMN db_type TEXT DEFAULT 'sqlite'`).run();
-    } catch (e) {}
-
-    try {
-      this.masterDb.prepare(`ALTER TABLE sys_project ADD COLUMN db_config TEXT`).run();
-    } catch (e) {}
-
-    // Seed default master superadmin if table is empty
-    const userCount = this.masterDb.prepare(`SELECT COUNT(*) as count FROM sys_master_user`).get()?.count || 0;
-    if (userCount === 0) {
-      this.masterDb.prepare(`
-        INSERT INTO sys_master_user (username, password, display_name, role)
-        VALUES ('admin', 'sutram', 'System Master Administrator', 'superadmin')
-      `).run();
-      console.log('⚡ [ProjectManager] Seeded default master administrator (admin / sutram)');
+    for (const sql of [
+      `ALTER TABLE sys_master_user ADD COLUMN can_create_project INTEGER DEFAULT 1`,
+      `ALTER TABLE sys_master_user ADD COLUMN misc_settings TEXT`,
+      `ALTER TABLE sys_project ADD COLUMN db_type TEXT DEFAULT 'sqlite'`,
+      `ALTER TABLE sys_project ADD COLUMN db_config TEXT`,
+      `ALTER TABLE sys_project ADD COLUMN misc_settings TEXT`
+    ]) {
+      try { this.masterDb.exec(sql); } catch {}
     }
 
     // 3. User ↔ Project Access Control
-    this.masterDb.prepare(`
+    this.masterDb.exec(`
       CREATE TABLE IF NOT EXISTS sys_project_access (
         _id          INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id      INTEGER NOT NULL REFERENCES sys_master_user(_id) ON DELETE CASCADE,
@@ -122,25 +116,96 @@ class ProjectManager {
         created_at   TEXT DEFAULT (datetime('now', 'localtime')),
         UNIQUE(user_id, project_id)
       )
-    `).run();
+    `);
+
+    this.masterCore = new Sutram({
+      db: this.masterDb,
+      schema: {
+        sys_project: {
+          columns: {
+            _id: { type: 'id', pk: true },
+            project_name: { type: 'string', required: true },
+            project_slug: { type: 'string', required: true },
+            db_file: { type: 'string', required: true },
+            db_path: { type: 'string', required: true },
+            description: { type: 'string' },
+            color: { type: 'string' },
+            icon: { type: 'string' },
+            owner_username: { type: 'string' },
+            active: { type: 'number' },
+            db_type: { type: 'string' },
+            db_config: { type: 'string' },
+            misc_settings: { type: 'string' },
+            created_at: { type: 'string' },
+            updated_at: { type: 'string' }
+          }
+        },
+        sys_master_user: {
+          columns: {
+            _id: { type: 'id', pk: true },
+            username: { type: 'string', required: true },
+            password: { type: 'string', required: true },
+            display_name: { type: 'string' },
+            role: { type: 'string' },
+            active: { type: 'number' },
+            can_create_project: { type: 'number' },
+            misc_settings: { type: 'string' },
+            created_at: { type: 'string' },
+            updated_at: { type: 'string' }
+          }
+        },
+        sys_project_access: {
+          columns: {
+            _id: { type: 'id', pk: true },
+            user_id: { type: 'number', required: true },
+            project_id: { type: 'number', required: true },
+            access_role: { type: 'string' },
+            created_at: { type: 'string' }
+          }
+        }
+      }
+    });
+
+    // Seed default master superadmin (hashed) if empty
+    const userCount = this.masterCore.table('sys_master_user').count();
+    if (userCount === 0) {
+      this.masterCore.table('sys_master_user').insert({
+        username: 'admin',
+        password: AuthManager.hashPassword('sutram'),
+        display_name: 'System Master Administrator',
+        role: 'superadmin',
+        can_create_project: 1,
+        active: 1,
+        misc_settings: AuthManager.stringifyMisc({ is_blank_password: false })
+      }, false);
+      console.log('⚡ [ProjectManager] Seeded default master administrator (admin / sutram)');
+    }
 
     // 4. Auto-register existing legacy database if present and no projects exist
-    const projectCount = this.masterDb.prepare(`SELECT COUNT(*) as count FROM sys_project WHERE active = 1`).get()?.count || 0;
+    const projectCount = this.masterCore.table('sys_project').count({ active: 1 });
     if (projectCount === 0 && fs.existsSync(this.legacyDbPath)) {
       try {
         const legacySlug = 'default_workspace';
-        this.masterDb.prepare(`
-          INSERT OR IGNORE INTO sys_project (project_name, project_slug, db_file, db_path, description, color, icon, owner_username)
-          VALUES ('Default Workspace (मुख्य कार्यक्षेत्र)', ?, ?, ?, 'Pre-existing default Sutram database workspace', '#6366f1', 'pi pi-database', 'admin')
-        `).run(legacySlug, path.basename(this.legacyDbPath), path.basename(this.legacyDbPath));
+        this.masterCore.upsert('sys_project', ['project_slug'], {
+          project_name: 'Default Workspace (मुख्य कार्यक्षेत्र)',
+          project_slug: legacySlug,
+          db_file: path.basename(this.legacyDbPath),
+          db_path: path.basename(this.legacyDbPath),
+          description: 'Pre-existing default Sutram database workspace',
+          color: '#6366f1',
+          icon: 'pi pi-database',
+          owner_username: 'admin',
+          active: 1
+        });
 
-        const defaultProj = this.masterDb.prepare(`SELECT _id FROM sys_project WHERE project_slug = ?`).get(legacySlug);
-        const adminUser = this.masterDb.prepare(`SELECT _id FROM sys_master_user WHERE username = 'admin'`).get();
+        const defaultProj = this.masterCore.table('sys_project').getOne({ project_slug: legacySlug }, { full: false });
+        const adminUser = this.masterCore.table('sys_master_user').getOne({ username: 'admin' }, { full: false });
         if (defaultProj && adminUser) {
-          this.masterDb.prepare(`
-            INSERT OR IGNORE INTO sys_project_access (user_id, project_id, access_role)
-            VALUES (?, ?, 'owner')
-          `).run(adminUser._id, defaultProj._id);
+          this.masterCore.upsert('sys_project_access', ['user_id', 'project_id'], {
+            user_id: adminUser._id,
+            project_id: defaultProj._id,
+            access_role: 'owner'
+          });
         }
         console.log(`⚡ [ProjectManager] Auto-registered legacy database as project "${legacySlug}"`);
       } catch (err) {
@@ -239,7 +304,7 @@ class ProjectManager {
     let isSuperAdmin = false;
 
     if (username) {
-      const u = this.masterDb.prepare(`SELECT * FROM sys_master_user WHERE username = ? AND active = 1`).get(username);
+      const u = this.masterCore.table('sys_master_user').getOne({ username, active: 1 }, { full: false });
       if (u && (u.role === 'superadmin' || u.username === 'admin')) {
         isSuperAdmin = true;
       }
@@ -248,15 +313,15 @@ class ProjectManager {
     }
 
     if (isSuperAdmin) {
-      rows = this.masterDb.prepare(`
+      rows = this.masterCore.query(`
         SELECT p.*,
           (SELECT COUNT(*) FROM sys_project_access WHERE project_id = p._id) as members_count
         FROM sys_project p
         WHERE p.active = 1
         ORDER BY p.updated_at DESC, p._id DESC
-      `).all();
+      `);
     } else {
-      rows = this.masterDb.prepare(`
+      rows = this.masterCore.query(`
         SELECT p.*,
           pa.access_role,
           (SELECT COUNT(*) FROM sys_project_access WHERE project_id = p._id) as members_count
@@ -265,10 +330,10 @@ class ProjectManager {
         JOIN sys_master_user u ON u._id = pa.user_id
         WHERE p.active = 1 AND u.username = ? AND u.active = 1
         ORDER BY p.updated_at DESC, p._id DESC
-      `).all(username);
+      `, [username]);
     }
 
-    // Enrich each project with live stats and table counts
+    // Enrich each project with live stats and sanitized metadata (never expose db_config credentials)
     return rows.map(p => {
       let fileSize = 0;
       let tablesCount = 0;
@@ -288,21 +353,24 @@ class ProjectManager {
             fileSize = stats.size;
             isOnline = true;
 
-            const quickDb = new Database(resolvedDbPath, { readonly: true });
-            const res = quickDb.prepare(`
-              SELECT COUNT(*) as count FROM sqlite_master
-              WHERE type = 'table' AND name NOT LIKE 'sys_%' AND name NOT LIKE 'xls_%' AND name NOT LIKE 'sqlite_%'
-            `).get();
-            tablesCount = res?.count || 0;
-            quickDb.close();
+            const cached = this.pool.get(p.project_slug);
+            if (cached?.engine?._schema) {
+              tablesCount = Object.keys(cached.engine._schema).filter(t => !t.startsWith('sys_') && !t.startsWith('xls_') && !t.startsWith('sqlite_')).length;
+            } else {
+              const quickDb = new Database(resolvedDbPath, { readonly: true });
+              const quickCore = new Sutram({ db: quickDb, schema: {} });
+              tablesCount = quickCore.listPhysicalTables().filter(t => !t.startsWith('sys_') && !t.startsWith('xls_') && !t.startsWith('sqlite_')).length;
+              quickDb.close();
+            }
           }
         } catch (e) {
           // Safe fallback
         }
       }
 
+      const safeProj = this.sessionManager.sanitizeProjectForApi(p);
       return {
-        ...p,
+        ...safeProj,
         file_size: fileSize,
         tables_count: tablesCount,
         is_online: isOnline,
@@ -344,14 +412,17 @@ class ProjectManager {
       return this.pool.get(cleanSlug);
     }
 
-    const project = this.masterDb.prepare(`SELECT * FROM sys_project WHERE (project_slug = ? OR _id = ?) AND active = 1`).get(cleanSlug, rawSlug);
+    const project = this.masterCore.queryOne(`SELECT * FROM sys_project WHERE (project_slug = ? OR _id = ?) AND active = 1`, [cleanSlug, rawSlug]);
     if (!project) {
       return null;
     }
 
+    const safeProject = this.sessionManager.sanitizeProjectForApi(project);
+
     // ── Handle MySQL Projects ─────────────────────────────────
     if (project.db_type === 'mysql') {
-      const mysqlConfig = project.db_config ? JSON.parse(project.db_config) : {};
+      const decryptedCfg = this.sessionManager.decryptSecret(project.db_config);
+      const mysqlConfig = decryptedCfg ? JSON.parse(decryptedCfg) : {};
       const { MySQLSutram, MySQLIntrospector } = require('../../packages/sutramcore-mysql');
 
       console.log(`⚡ [ProjectManager] Connecting to MySQL project "${project.project_name}" (${project.project_slug})...`);
@@ -384,7 +455,7 @@ class ProjectManager {
       await this._syncExcelRegistrations(engine, excel, true);
 
       const instance = {
-        project,
+        project: safeProject,
         engine,
         excel,
         lastUsed: Date.now()
@@ -424,7 +495,7 @@ class ProjectManager {
     await this._syncExcelRegistrations(engine, excel, true);
 
     const instance = {
-      project,
+      project: safeProject,
       engine,
       excel,
       lastUsed: Date.now()
@@ -499,14 +570,14 @@ class ProjectManager {
     // Ensure slug uniqueness in sys_project
     let candidateSlug = slug;
     let counter = 1;
-    while (this.masterDb.prepare(`SELECT 1 FROM sys_project WHERE project_slug = ?`).get(candidateSlug)) {
+    while (this.masterCore.table('sys_project').getOne({ project_slug: candidateSlug }, { full: false })) {
       candidateSlug = `${slug}_${counter}`;
       counter++;
     }
     slug = candidateSlug;
 
     const cleanAdminUser = String(username || 'admin').trim();
-    const cleanAdminPass = password && String(password).trim() ? String(password).trim() : 'admin';
+    const cleanAdminPass = AuthManager.normalizePassword(password);
     let adopterLogs = [];
 
     // ── MySQL Project Creation / Adoption ──────────────────────
@@ -520,7 +591,6 @@ class ProjectManager {
       const targetPass = config.password || '';
       const targetDb = config.database || slug;
 
-      // If requested to clone an existing database on MySQL server
       if (config.clone && config.clone_source_db) {
         const sourceDb = config.clone_source_db;
         adopterLogs.push(`[CLONE] Cloning MySQL database "${sourceDb}" into "${targetDb}"...`);
@@ -546,12 +616,10 @@ class ProjectManager {
         }
       }
 
-      // Connect to target database
       adopterLogs.push(`[CONNECT] Connecting to MySQL database \`${targetDb}\` on ${targetHost}:${targetPort}...`);
       const sutram = new MySQLSutram({ host: targetHost, port: targetPort, user: targetUser, password: targetPass, database: targetDb, schema: {} });
       await sutram.connect();
 
-      // Introspect and Adopt
       const introspected = await MySQLIntrospector.introspect(sutram.adapter, targetDb);
       const adopter = new DatabaseAdopter(sutram.adapter);
       await adopter.adoptAsync(introspected, {
@@ -562,13 +630,11 @@ class ProjectManager {
         adopterLogs.push(`[${step}] ${msg}`);
       });
 
-      // Initialize Engine & Excel (Managed Mode, Uniform Async Contract)
       const engine = await new SutramEngine({ sutram, mode: 'managed' }).init();
       const excel = await new SutramExcel(engine).init();
       await this._syncExcelRegistrations(engine, excel, true);
 
-      // Register in Master DB
-      const serializedConfig = JSON.stringify({
+      const encryptedConfig = this.sessionManager.encryptSecret({
         host: targetHost,
         port: targetPort,
         user: targetUser,
@@ -576,39 +642,39 @@ class ProjectManager {
         database: targetDb
       });
 
-      const insertProj = this.masterDb.prepare(`
-        INSERT INTO sys_project (
-          project_name, project_slug, db_file, db_path, description, color, icon, owner_username, db_type, db_config, active
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'mysql', ?, 1)
-      `).run(
-        cleanName,
-        slug,
-        targetDb,
-        `mysql://${targetHost}:${targetPort}/${targetDb}`,
-        description ? String(description).trim() : '',
-        color || '#3b82f6',
-        icon || 'pi pi-server',
-        createdBy || 'admin',
-        serializedConfig
-      );
+      const projectId = this.masterCore.table('sys_project').insert({
+        project_name: cleanName,
+        project_slug: slug,
+        db_file: targetDb,
+        db_path: `mysql://${targetHost}:${targetPort}/${targetDb}`,
+        description: description ? String(description).trim() : '',
+        color: color || '#3b82f6',
+        icon: icon || 'pi pi-server',
+        owner_username: createdBy || 'admin',
+        db_type: 'mysql',
+        db_config: encryptedConfig,
+        misc_settings: AuthManager.stringifyMisc({ created_mode: 'mysql' }),
+        active: 1
+      }, false);
 
-      const projectId = insertProj.lastInsertRowid;
-      const masterUser = this.masterDb.prepare(`SELECT _id FROM sys_master_user WHERE username = ?`).get(createdBy || 'admin');
+      const masterUser = this.masterCore.table('sys_master_user').getOne({ username: createdBy || 'admin' }, { full: false });
       if (masterUser) {
-        this.masterDb.prepare(`
-          INSERT OR IGNORE INTO sys_project_access (user_id, project_id, access_role)
-          VALUES (?, ?, 'owner')
-        `).run(masterUser._id, projectId);
+        this.masterCore.upsert('sys_project_access', ['user_id', 'project_id'], {
+          user_id: masterUser._id,
+          project_id: projectId,
+          access_role: 'owner'
+        });
       }
 
-      const newProject = this.masterDb.prepare(`SELECT * FROM sys_project WHERE _id = ?`).get(projectId);
-      const instance = { project: newProject, engine, excel, lastUsed: Date.now() };
+      const rawProject = this.masterCore.table('sys_project').getById(projectId);
+      const safeProject = this.sessionManager.sanitizeProjectForApi(rawProject);
+      const instance = { project: safeProject, engine, excel, lastUsed: Date.now() };
       this.pool.set(slug, instance);
 
       adopterLogs.push(`[SUCCESS] MySQL Project "${cleanName}" (${targetDb}) successfully initialized.`);
       return {
         success: true,
-        project: newProject,
+        project: safeProject,
         logs: adopterLogs,
         message: `MySQL Project "${cleanName}" created and ready.`
       };
@@ -626,10 +692,8 @@ class ProjectManager {
       adopterLogs.push(`[INIT] Copying uploaded database to workspace (${dbFilename})...`);
       fs.copyFileSync(tempDbFile, targetDbPath);
 
-      // Clean up temp file
       try { fs.unlinkSync(tempDbFile); } catch (e) {}
 
-      // Open target DB for optimization and adoption
       adopterLogs.push('[PRAGMA] Setting journal_mode = WAL, synchronous = NORMAL, foreign_keys = ON...');
       const targetDb = new Database(targetDbPath);
       targetDb.pragma('journal_mode = WAL');
@@ -639,7 +703,7 @@ class ProjectManager {
 
       const introspected = SQLiteIntrospector.introspect(targetDb);
       const adopter = new DatabaseAdopter(targetDb);
-      const adoptRes = adopter.adopt(introspected, {
+      adopter.adopt(introspected, {
         username: cleanAdminUser,
         password: cleanAdminPass,
         displayName: `${cleanName} Administrator`
@@ -655,42 +719,45 @@ class ProjectManager {
     // 1. Initialize engine instance (runs SysMigrator and loads schema)
     const engine = await new SutramEngine({ dbPath: targetDbPath, mode: 'managed' }).init();
 
-    // 2. Configure In-Project Administrator in project's sys_user table
+    // 2. Configure In-Project Administrator in project's sys_user table (salted hash + blank password safe)
     await engine.upsert('sys_user', ['username'], {
       username: cleanAdminUser,
-      password: cleanAdminPass,
+      password: AuthManager.hashPassword(cleanAdminPass),
       display_name: `${cleanName} Administrator`,
       role: 'admin',
-      active: 1
+      active: 1,
+      can_ocr: 1,
+      misc_settings: AuthManager.stringifyMisc({
+        can_ocr: 1,
+        is_blank_password: cleanAdminPass === ''
+      })
     });
     adopterLogs.push(`[USER] Project administrator configured (${cleanAdminUser}).`);
 
     // 3. Register project in Master DB (using portable relative path)
     const portableDbPath = path.posix.join('projects', dbFilename);
-    const insertProj = this.masterDb.prepare(`
-      INSERT INTO sys_project (
-        project_name, project_slug, db_file, db_path, description, color, icon, owner_username, active
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
-    `).run(
-      cleanName,
-      slug,
-      dbFilename,
-      portableDbPath,
-      description ? String(description).trim() : '',
-      color || '#10b981',
-      icon || 'pi pi-folder',
-      createdBy || 'admin'
-    );
-
-    const projectId = insertProj.lastInsertRowid;
+    const projectId = this.masterCore.table('sys_project').insert({
+      project_name: cleanName,
+      project_slug: slug,
+      db_file: dbFilename,
+      db_path: portableDbPath,
+      description: description ? String(description).trim() : '',
+      color: color || '#10b981',
+      icon: icon || 'pi pi-folder',
+      owner_username: createdBy || 'admin',
+      db_type: 'sqlite',
+      misc_settings: AuthManager.stringifyMisc({ created_mode: dbSource || 'blank' }),
+      active: 1
+    }, false);
 
     // 4. Link Creator to Project Access in sys_project_access
-    const masterUser = this.masterDb.prepare(`SELECT _id FROM sys_master_user WHERE username = ?`).get(createdBy || 'admin');
+    const masterUser = this.masterCore.table('sys_master_user').getOne({ username: createdBy || 'admin' }, { full: false });
     if (masterUser) {
-      this.masterDb.prepare(`
-        INSERT OR IGNORE INTO sys_project_access (user_id, project_id, access_role)
-        VALUES (?, ?, 'owner')
-      `).run(masterUser._id, projectId);
+      this.masterCore.upsert('sys_project_access', ['user_id', 'project_id'], {
+        user_id: masterUser._id,
+        project_id: projectId,
+        access_role: 'owner'
+      });
     }
 
     // 5. Instantiate SutramExcel strictly on top of SutramEngine
@@ -698,10 +765,11 @@ class ProjectManager {
     const excel = await new SutramExcel(engine).init();
     await this._syncExcelRegistrations(engine, excel, true);
 
-    const newProject = this.masterDb.prepare(`SELECT * FROM sys_project WHERE _id = ?`).get(projectId);
+    const rawProject = this.masterCore.table('sys_project').getById(projectId);
+    const safeProject = this.sessionManager.sanitizeProjectForApi(rawProject);
 
     const instance = {
-      project: newProject,
+      project: safeProject,
       engine,
       excel,
       lastUsed: Date.now()
@@ -714,7 +782,7 @@ class ProjectManager {
 
     return {
       success: true,
-      project: newProject,
+      project: safeProject,
       logs: adopterLogs,
       message: `Project "${cleanName}" created and ready.`
     };
@@ -724,7 +792,7 @@ class ProjectManager {
    * Updates project metadata (display name, description, color, icon)
    */
   updateProject(slug, { name, description, color, icon }) {
-    const existing = this.masterDb.prepare(`SELECT * FROM sys_project WHERE project_slug = ? AND active = 1`).get(slug);
+    const existing = this.masterCore.table('sys_project').getOne({ project_slug: slug, active: 1 }, { full: false });
     if (!existing) {
       throw new Error(`Project "${slug}" not found`);
     }
@@ -734,24 +802,26 @@ class ProjectManager {
     const updatedColor = color || existing.color;
     const updatedIcon = icon || existing.icon;
 
-    this.masterDb.prepare(`
+    this.masterCore.run(`
       UPDATE sys_project
       SET project_name = ?, description = ?, color = ?, icon = ?, updated_at = datetime('now', 'localtime')
       WHERE _id = ?
-    `).run(updatedName, updatedDesc, updatedColor, updatedIcon, existing._id);
+    `, [updatedName, updatedDesc, updatedColor, updatedIcon, existing._id]);
 
+    const updatedRaw = this.masterCore.table('sys_project').getById(existing._id);
+    const safeUpdated = this.sessionManager.sanitizeProjectForApi(updatedRaw);
     if (this.pool.has(slug)) {
-      this.pool.get(slug).project = this.masterDb.prepare(`SELECT * FROM sys_project WHERE _id = ?`).get(existing._id);
+      this.pool.get(slug).project = safeUpdated;
     }
 
-    return this.masterDb.prepare(`SELECT * FROM sys_project WHERE _id = ?`).get(existing._id);
+    return safeUpdated;
   }
 
   /**
    * Soft-deletes a project from active list, optionally running a zero-trace purge of Sutram metadata
    */
   async deleteProject(slug, purge = false) {
-    const existing = this.masterDb.prepare(`SELECT * FROM sys_project WHERE project_slug = ?`).get(slug);
+    const existing = this.masterCore.table('sys_project').getOne({ project_slug: slug }, { full: false });
     if (!existing) {
       throw new Error(`Project "${slug}" not found`);
     }
@@ -769,13 +839,12 @@ class ProjectManager {
       }
     }
 
-    // Close active engine core connection if pooled
     const cached = this.pool.get(slug);
     if (cached?.engine?.core && typeof cached.engine.core.close === 'function') {
       try { await cached.engine.core.close(); } catch {}
     }
 
-    this.masterDb.prepare(`UPDATE sys_project SET active = 0, updated_at = datetime('now', 'localtime') WHERE _id = ?`).run(existing._id);
+    this.masterCore.run(`UPDATE sys_project SET active = 0, updated_at = datetime('now', 'localtime') WHERE _id = ?`, [existing._id]);
     this.pool.delete(slug);
 
     return {
@@ -792,7 +861,7 @@ class ProjectManager {
    * Returns default project slug (first active project or legacy)
    */
   getDefaultProjectSlug() {
-    const p = this.masterDb.prepare(`SELECT project_slug FROM sys_project WHERE active = 1 ORDER BY _id ASC LIMIT 1`).get();
+    const p = this.masterCore.queryOne(`SELECT project_slug FROM sys_project WHERE active = 1 ORDER BY _id ASC LIMIT 1`);
     return p?.project_slug || null;
   }
 
@@ -822,29 +891,64 @@ class ProjectManager {
   // Master Workspace Users & Access Control
   // ─────────────────────────────────────────────────────────────
 
+  _sanitizeMasterUser(u) {
+    if (!u) return null;
+    const misc = AuthManager.parseMisc(u.misc_settings);
+    const isBlank = misc.is_blank_password !== undefined
+      ? Boolean(misc.is_blank_password)
+      : (String(u.password || '') === '' || AuthManager.verifyPassword('', u.password).valid);
+    return {
+      _id: u._id,
+      username: u.username,
+      display_name: u.display_name,
+      role: u.role,
+      can_create_project: u.can_create_project,
+      active: u.active,
+      is_blank_password: isBlank,
+      misc_settings: misc,
+      created_at: u.created_at,
+      updated_at: u.updated_at
+    };
+  }
+
+  getMasterUserById(userId) {
+    const u = this.masterCore.table('sys_master_user').getOne({ _id: Number(userId), active: 1 }, { full: false });
+    return this._sanitizeMasterUser(u);
+  }
+
   getMasterUsers() {
-    return this.masterDb.prepare(`
-      SELECT _id, username, display_name, role, can_create_project, active, created_at, updated_at
-      FROM sys_master_user
-      ORDER BY _id ASC
-    `).all();
+    const rows = this.masterCore.table('sys_master_user').getAll({}, { full: false, orderBy: '_id ASC' });
+    return (rows || []).map(u => this._sanitizeMasterUser(u));
   }
 
   getUserProjects(userId) {
-    return this.masterDb.prepare(`
+    return this.masterCore.query(`
       SELECT p._id as project_id, p.project_name, p.project_slug, pa.access_role
       FROM sys_project_access pa
       JOIN sys_project p ON p._id = pa.project_id
       WHERE pa.user_id = ? AND p.active = 1
-    `).all(userId);
+    `, [Number(userId)]);
   }
 
-  createMasterUser({ username, password, display_name, role = 'user', can_create_project }) {
-    if (!username || !password) {
-      throw new Error('Username and password are required');
+  userHasProjectAccess(userId, slug) {
+    const u = this.getMasterUserById(userId);
+    if (!u) return false;
+    if (u.role === 'superadmin' || u.username === 'admin') return true;
+    const hit = this.masterCore.queryOne(`
+      SELECT pa._id FROM sys_project_access pa
+      JOIN sys_project p ON p._id = pa.project_id
+      WHERE pa.user_id = ? AND (p.project_slug = ? OR p._id = ?) AND p.active = 1
+    `, [Number(userId), String(slug), slug]);
+    return Boolean(hit);
+  }
+
+  createMasterUser({ username, password = '', display_name, role = 'user', can_create_project, misc_settings = {} }) {
+    const cleanUser = String(username || '').trim();
+    if (!cleanUser) {
+      throw new Error('Username is required');
     }
-    const cleanUser = String(username).trim();
-    const cleanPass = String(password).trim();
+    const cleanPass = AuthManager.normalizePassword(password);
+    const hashed = AuthManager.hashPassword(cleanPass);
     const cleanRole = role === 'superadmin' ? 'superadmin' : (role === 'admin' ? 'admin' : 'user');
     let canCreate = 0;
     if (cleanRole === 'superadmin') {
@@ -855,16 +959,26 @@ class ProjectManager {
       canCreate = can_create_project ? 1 : 0;
     }
 
-    const info = this.masterDb.prepare(`
-      INSERT INTO sys_master_user (username, password, display_name, role, can_create_project, active)
-      VALUES (?, ?, ?, ?, ?, 1)
-    `).run(cleanUser, cleanPass, display_name || cleanUser, cleanRole, canCreate);
+    const misc = {
+      ...AuthManager.parseMisc(misc_settings),
+      is_blank_password: cleanPass === ''
+    };
 
-    return this.masterDb.prepare(`SELECT _id, username, display_name, role, can_create_project, active, created_at FROM sys_master_user WHERE _id = ?`).get(info.lastInsertRowid);
+    const newId = this.masterCore.table('sys_master_user').insert({
+      username: cleanUser,
+      password: hashed,
+      display_name: display_name || cleanUser,
+      role: cleanRole,
+      can_create_project: canCreate,
+      active: 1,
+      misc_settings: AuthManager.stringifyMisc(misc)
+    }, false);
+
+    return this._sanitizeMasterUser(this.masterCore.table('sys_master_user').getById(newId));
   }
 
-  updateMasterUser(userId, { display_name, role, can_create_project, active, password }) {
-    const existing = this.masterDb.prepare(`SELECT * FROM sys_master_user WHERE _id = ?`).get(userId);
+  updateMasterUser(userId, { display_name, role, can_create_project, active, password, misc_settings }) {
+    const existing = this.masterCore.table('sys_master_user').getOne({ _id: Number(userId) }, { full: false });
     if (!existing) throw new Error('User not found');
 
     const newName = display_name !== undefined ? display_name : existing.display_name;
@@ -876,65 +990,85 @@ class ProjectManager {
     if (newRole === 'superadmin') newCanCreate = 1;
 
     const newActive = active !== undefined ? (active ? 1 : 0) : existing.active;
+    const nextMisc = {
+      ...AuthManager.parseMisc(existing.misc_settings),
+      ...AuthManager.parseMisc(misc_settings)
+    };
 
-    if (password && String(password).trim()) {
-      this.masterDb.prepare(`
-        UPDATE sys_master_user
-        SET display_name = ?, role = ?, can_create_project = ?, active = ?, password = ?, updated_at = datetime('now', 'localtime')
-        WHERE _id = ?
-      `).run(newName, newRole, newCanCreate, newActive, String(password).trim(), userId);
-    } else {
-      this.masterDb.prepare(`
-        UPDATE sys_master_user
-        SET display_name = ?, role = ?, can_create_project = ?, active = ?, updated_at = datetime('now', 'localtime')
-        WHERE _id = ?
-      `).run(newName, newRole, newCanCreate, newActive, userId);
+    let nextPassword = existing.password;
+    if (password !== undefined && password !== null) {
+      const cleanPass = AuthManager.normalizePassword(password);
+      nextPassword = AuthManager.hashPassword(cleanPass);
+      nextMisc.is_blank_password = cleanPass === '';
     }
 
-    return this.masterDb.prepare(`SELECT _id, username, display_name, role, can_create_project, active, updated_at FROM sys_master_user WHERE _id = ?`).get(userId);
+    this.masterCore.run(`
+      UPDATE sys_master_user
+      SET display_name = ?, role = ?, can_create_project = ?, active = ?, password = ?, misc_settings = ?, updated_at = datetime('now', 'localtime')
+      WHERE _id = ?
+    `, [newName, newRole, newCanCreate, newActive, nextPassword, AuthManager.stringifyMisc(nextMisc), Number(userId)]);
+
+    return this._sanitizeMasterUser(this.masterCore.table('sys_master_user').getById(Number(userId)));
   }
 
   getProjectAccess(projectId) {
-    return this.masterDb.prepare(`
+    return this.masterCore.query(`
       SELECT pa._id as access_id, pa.access_role, pa.created_at,
              u._id as user_id, u.username, u.display_name, u.role as master_role
       FROM sys_project_access pa
       JOIN sys_master_user u ON u._id = pa.user_id
       WHERE pa.project_id = ?
       ORDER BY u.username ASC
-    `).all(projectId);
+    `, [Number(projectId)]);
   }
 
   grantProjectAccess(userId, projectId, accessRole = 'member') {
-    this.masterDb.prepare(`
-      INSERT INTO sys_project_access (user_id, project_id, access_role)
-      VALUES (?, ?, ?)
-      ON CONFLICT(user_id, project_id) DO UPDATE SET access_role = excluded.access_role
-    `).run(userId, projectId, accessRole);
+    this.masterCore.upsert('sys_project_access', ['user_id', 'project_id'], {
+      user_id: Number(userId),
+      project_id: Number(projectId),
+      access_role: accessRole
+    });
     return { success: true };
   }
 
   revokeProjectAccess(userId, projectId) {
-    this.masterDb.prepare(`
-      DELETE FROM sys_project_access WHERE user_id = ? AND project_id = ?
-    `).run(userId, projectId);
+    this.masterCore.run(`DELETE FROM sys_project_access WHERE user_id = ? AND project_id = ?`, [Number(userId), Number(projectId)]);
     return { success: true };
   }
 
-  verifyMasterUser(username, password) {
-    const user = this.masterDb.prepare(`
-      SELECT _id, username, display_name, role, can_create_project, active, created_at
-      FROM sys_master_user
-      WHERE username = ? AND password = ? AND active = 1
-    `).get(username, password);
-    if (!user) return null;
-    const token = Buffer.from(`${user.username}:${Date.now()}:${user._id}`).toString('base64');
-    return { ...user, token };
+  verifyMasterUser(username, password = '') {
+    const cleanUser = String(username || '').trim();
+    if (!cleanUser) return null;
+
+    const rawUser = this.masterCore.table('sys_master_user').getOne({ username: cleanUser, active: 1 }, { full: false });
+    if (!rawUser) return null;
+
+    const cleanPass = AuthManager.normalizePassword(password);
+    const check = AuthManager.verifyPassword(cleanPass, rawUser.password);
+    if (!check.valid) return null;
+
+    if (check.needsRehash) {
+      try {
+        const misc = {
+          ...AuthManager.parseMisc(rawUser.misc_settings),
+          is_blank_password: cleanPass === ''
+        };
+        this.masterCore.run(
+          `UPDATE sys_master_user SET password = ?, misc_settings = ?, updated_at = datetime('now', 'localtime') WHERE _id = ?`,
+          [AuthManager.hashPassword(cleanPass), AuthManager.stringifyMisc(misc), rawUser._id]
+        );
+        rawUser.misc_settings = AuthManager.stringifyMisc(misc);
+      } catch {}
+    }
+
+    const safeUser = this._sanitizeMasterUser(rawUser);
+    const token = this.sessionManager.issueMasterToken(safeUser);
+    return { ...safeUser, token };
   }
 
   canUserCreateProject(username) {
     if (!username) return false;
-    const u = this.masterDb.prepare(`SELECT * FROM sys_master_user WHERE username = ? AND active = 1`).get(username);
+    const u = this.masterCore.table('sys_master_user').getOne({ username: String(username).trim(), active: 1 }, { full: false });
     if (!u) return false;
     if (u.role === 'superadmin' || u.username === 'admin') return true;
     return u.can_create_project === 1;

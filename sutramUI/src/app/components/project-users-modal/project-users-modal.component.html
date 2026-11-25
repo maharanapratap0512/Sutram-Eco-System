@@ -177,6 +177,8 @@
                 <button pButton type="button" class="bulk-btn" label="All Edit" (click)="toggleAll('can_edit')"></button>
                 <button pButton type="button" class="bulk-btn" label="All Delete" (click)="toggleAll('can_delete')"></button>
                 <button pButton type="button" class="bulk-btn" label="All Unmask" (click)="toggleAll('can_unmask')"></button>
+                <button pButton type="button" class="bulk-btn" label="Scope: All" (click)="toggleAllDataScope('all')" title="All rows visible & editable"></button>
+                <button pButton type="button" class="bulk-btn" label="Scope: Own" (click)="toggleAllDataScope('own')" title="Restrict non-admins to own user_id rows"></button>
               </div>
             </div>
 
@@ -190,6 +192,7 @@
                     <th class="th-check">Edit</th>
                     <th class="th-check">Delete</th>
                     <th class="th-check" title="Unmask password/secret columns">Unmask</th>
+                    <th class="th-scope" title="All records vs Own records (filtered by user_id)">Data Scope</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -209,6 +212,18 @@
                     </td>
                     <td class="td-check">
                       <p-checkbox [(ngModel)]="r.can_unmask" [binary]="true"></p-checkbox>
+                    </td>
+                    <td class="td-scope">
+                      <button
+                        type="button"
+                        class="scope-toggle-pill"
+                        [class.scope-own]="selectedUser?.role !== 'admin' && r.data_scope === 'own'"
+                        [disabled]="selectedUser?.role === 'admin'"
+                        (click)="toggleRowDataScope(r)"
+                        [title]="selectedUser?.role === 'admin' ? 'Admin always accesses all data' : (r.data_scope === 'own' ? 'Restricted to user_id own rows — click to switch' : 'All table rows — click to restrict by user_id')">
+                        <i class="pi" [ngClass]="selectedUser?.role !== 'admin' && r.data_scope === 'own' ? 'pi-user' : 'pi-users'"></i>
+                        <span>{{ selectedUser?.role === 'admin' ? 'All (Admin)' : (r.data_scope === 'own' ? 'Own Data' : 'All Data') }}</span>
+                      </button>
                     </td>
                   </tr>
                 </tbody>
@@ -282,13 +297,25 @@
 
               <!-- Field 4: Password -->
               <div class="form-field">
-                <label>{{ rightViewMode === 'add_user' ? 'Password *' : 'Password Reset' }}</label>
-                <input
-                  type="password"
-                  pInputText
-                  class="p-inputtext-sm w-full font-mono"
-                  [(ngModel)]="formPassword"
-                  [placeholder]="rightViewMode === 'add_user' ? 'Minimum 4 characters' : 'Leave blank to keep unchanged'" />
+                <label>{{ rightViewMode === 'add_user' ? 'Password' : 'Password Reset' }}</label>
+                <div class="p-inputgroup w-full">
+                  <input
+                    type="password"
+                    pInputText
+                    class="p-inputtext-sm w-full font-mono"
+                    [(ngModel)]="formPassword"
+                    (ngModelChange)="formPasswordDirty = true"
+                    [placeholder]="rightViewMode === 'add_user' ? 'Blank = no password' : (formPasswordDirty ? 'Blank = remove password' : 'Leave untouched to keep existing')" />
+                  <button
+                    *ngIf="rightViewMode === 'edit_user'"
+                    type="button"
+                    pButton
+                    class="p-button-sm p-button-outlined p-button-secondary"
+                    icon="pi pi-eraser"
+                    title="Clear password (set blank password)"
+                    (click)="formPassword = ''; formPasswordDirty = true">
+                  </button>
+                </div>
               </div>
 
               <!-- Field 5: Feature Rights (Span 2) -->

@@ -106,7 +106,14 @@ class ExcelImporter {
             if (row.id === null || row.id === undefined || row.id === '') {
                 delete row.id;
             }
+            if (req?.projectUser && this.engine.auth) {
+                row = this.engine.auth.injectOwnerForWrite(tableName, row, req.projectUser);
+            }
             const result = await this.engine.insert(tableName, row);
+            const insertedId = (result && typeof result === 'object') ? (result[pk] ?? result._id ?? result.id) : result;
+            if (insertedId !== undefined && insertedId !== null && row[pk] === undefined) {
+                row[pk] = insertedId;
+            }
             return { status: 'inserted', data: row, newData: result };
         } catch (err) {
             return { status: 'rejected', data: row, error: err.message };
@@ -118,6 +125,22 @@ class ExcelImporter {
     // ─────────────────────────────────────────────────────────
 
     async updateRow(row, tableConfig, req = {}) {
+        const tableName = tableConfig.table || tableConfig.tableName || tableConfig.table_name;
+        const tbl = this.engine.table ? this.engine.table(tableName) : null;
+        const pk = tbl?.pkName || '_id';
+        let targetId = row[pk] ?? row._id ?? row.id;
+
+        // Enforce row-level ownership BEFORE validation/FK leaks if PK is already supplied
+        if (targetId !== undefined && targetId !== null && targetId !== '' && req?.projectUser && this.engine.auth) {
+            const ownFilter = this.engine.auth.getOwnershipFilter(req.projectUser, tableName, req.projectRights || []);
+            if (ownFilter) {
+                const existingRow = await this.engine.getById(tableName, targetId);
+                if (!existingRow || Number(existingRow[ownFilter.column]) !== ownFilter.value) {
+                    return { status: 'rejected', statusCode: 403, data: row, error: 'Access Denied: You can only update your own records.' };
+                }
+            }
+        }
+
         // 0. auto-resolve FK references
         row = await this._resolveReferences(row, tableConfig);
 
@@ -134,22 +157,7 @@ class ExcelImporter {
         row = this._parseJson(row, tableConfig);
         row = this._applyAutoSet(row, tableConfig, req);
 
-        // 5. validate required fields
-        const missing = this._validateRequired(row, tableConfig);
-        if (missing.length) {
-            return {
-                status: 'rejected',
-                data:   row,
-                error:  `Missing required: ${missing.join(', ')}`,
-            };
-        }
-
         try {
-            const tableName = tableConfig.table || tableConfig.tableName || tableConfig.table_name;
-            const tbl = this.engine.table ? this.engine.table(tableName) : null;
-            const pk = tbl?.pkName || '_id';
-            let targetId = row[pk] ?? row._id ?? row.id;
-
             if ((targetId === undefined || targetId === null || targetId === '') && tableConfig.duplicateOn?.length) {
                 const existing = await this._checkDuplicate(row, tableConfig);
                 if (existing.length) {
@@ -160,6 +168,37 @@ class ExcelImporter {
             if (targetId === undefined || targetId === null || targetId === '') {
                 return { status: 'rejected', data: row, error: `No primary key (${pk}) for update` };
             }
+            // Strip unchanged masked placeholders for sensitive columns; prevent author spoofing user_id
+            const schemaCols = this.engine?._schema?.[tableName]?.columns || {};
+            for (const [cName, cDef] of Object.entries(schemaCols)) {
+                const t = String(cDef?.type || cDef?.col_type || '').toLowerCase();
+                if ((t === 'password' || /password|pwd|secret_hash|secret|pin/i.test(cName)) && row[cName] === '••••••••') {
+                    delete row[cName];
+                }
+            }
+            if (req?.projectUser && req.projectUser.role !== 'admin') {
+                delete row.user_id;
+            }
+            if (req?.projectUser && this.engine.auth) {
+                const ownFilter = this.engine.auth.getOwnershipFilter(req.projectUser, tableName, req.projectRights || []);
+                if (ownFilter) {
+                    const existingRow = await this.engine.getById(tableName, targetId);
+                    if (!existingRow || Number(existingRow[ownFilter.column]) !== ownFilter.value) {
+                        return { status: 'rejected', statusCode: 403, data: row, error: 'Access Denied: You can only update your own records.' };
+                    }
+                }
+            }
+
+            // 5. validate required fields after authorization check
+            const missing = this._validateRequired(row, tableConfig);
+            if (missing.length) {
+                return {
+                    status: 'rejected',
+                    data:   row,
+                    error:  `Missing required: ${missing.join(', ')}`,
+                };
+            }
+
             const result = await this.engine.updateById(tableName, row, targetId);
             return { status: 'updated', data: row, newData: result };
         } catch (err) {

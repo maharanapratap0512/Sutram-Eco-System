@@ -1,5 +1,6 @@
-import { Component, OnInit, ChangeDetectorRef, ViewChild } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef, ViewChild } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
+import { Subscription } from 'rxjs';
 import { SutramExcelStudioComponent } from '../ng-sutramui-excel/lib/components/sutram-excel-studio/sutram-excel-studio.component';
 import { ProjectContextService } from './services/project-context.service';
 import { ProjectItem, MasterUser } from './models/project.model';
@@ -9,7 +10,7 @@ import { ProjectItem, MasterUser } from './models/project.model';
   templateUrl: './app.component.html',
   styleUrls: ['./app.component.scss']
 })
-export class AppComponent implements OnInit {
+export class AppComponent implements OnInit, OnDestroy {
   @ViewChild('studio') public studioComponent?: SutramExcelStudioComponent;
   public selectedTable: string = '';
   public tablesList: Array<{ name: string; display: string }> = [];
@@ -21,6 +22,7 @@ export class AppComponent implements OnInit {
   public showProjectUsersModal: boolean = false;
   public showLanModal: boolean = false;
   public showUpdateModal: boolean = false;
+  private subs: Subscription[] = [];
 
   public onOpenProjectUsersModal(): void {
     this.showProjectUsersModal = true;
@@ -53,13 +55,35 @@ export class AppComponent implements OnInit {
     }
     this.checkServerHealth();
 
-    // Restore projectTables map from localStorage
+    // Restore UI-only last selected table per project
     try {
       const rawMap = localStorage.getItem('sutram_project_tables_map');
       if (rawMap) {
         this.projectTables = JSON.parse(rawMap) || {};
       }
     } catch {}
+
+    this.subs.push(
+      this.projectContext.activeProject$.subscribe(activeProj => {
+        if (!activeProj && this.isStudioMounted) {
+          this.isStudioMounted = false;
+          this.tablesList = [];
+          this.selectedTable = '';
+          this.cdr.markForCheck();
+        } else if (activeProj && this.projectContext.isAuthenticated && !this.showingHub && !this.isStudioMounted) {
+          this.onSelectProjectTab(activeProj, true);
+        }
+      }),
+      this.projectContext.masterUser$.subscribe(() => {
+        if (!this.projectContext.isAuthenticated) {
+          this.showingHub = false;
+          this.isStudioMounted = false;
+          this.tablesList = [];
+          this.selectedTable = '';
+          this.cdr.markForCheck();
+        }
+      })
+    );
 
     if (!this.projectContext.isAuthenticated) {
       this.showingHub = false;
@@ -71,9 +95,35 @@ export class AppComponent implements OnInit {
       this.showingHub = true;
       this.isStudioMounted = false;
     } else if (this.projectContext.activeProject) {
-      // Force cleanly activate the restored active project on page reload/refresh
+      // Restore active project tab cleanly on page refresh
       this.onSelectProjectTab(this.projectContext.activeProject, true);
     }
+  }
+
+  public ngOnDestroy(): void {
+    this.subs.forEach(s => s.unsubscribe());
+  }
+
+  public onProjectSessionAuthenticated(evt: { projectSlug: string; user: any; rights: any[]; token: string }): void {
+    if (!evt || !evt.projectSlug) return;
+    this.projectContext.setProjectSession(evt.projectSlug, {
+      projectSlug: evt.projectSlug,
+      user: evt.user,
+      rights: evt.rights || [],
+      token: evt.token
+    });
+    if (this.projectContext.activeProject?.project_slug === evt.projectSlug) {
+      this.loadTablesForProject(evt.projectSlug);
+    }
+    this.cdr.markForCheck();
+  }
+
+  public onProjectSessionLocked(slug: string): void {
+    if (slug) {
+      this.projectContext.clearProjectAuth(slug);
+    }
+    this.tablesList = [];
+    this.cdr.markForCheck();
   }
 
   public onMasterLoginSuccess(user: MasterUser): void {
@@ -120,21 +170,25 @@ export class AppComponent implements OnInit {
 
     const savedTable = this.projectTables[project.project_slug] || localStorage.getItem(`sutram_active_table_${project.project_slug}`) || '';
     this.selectedTable = savedTable;
+    this.tablesList = [];
 
-    // Call server to instantly switch active database connection
-    this.http.post(`/api/_sutram/master/projects/switch/${encodeURIComponent(project.project_slug)}`, {}).subscribe({
-      next: () => {
+    const finishMount = () => {
+      if (this.projectContext.isProjectAuthenticated(project.project_slug)) {
         this.loadTablesForProject(project.project_slug, () => {
           this.isStudioMounted = true;
           this.cdr.markForCheck();
         });
-      },
-      error: () => {
-        this.loadTablesForProject(project.project_slug, () => {
-          this.isStudioMounted = true;
-          this.cdr.markForCheck();
-        });
+      } else {
+        // Never pre-fetch project tables/data before project login; studio mounts directly to opaque Lock Gate
+        this.isStudioMounted = true;
+        this.cdr.markForCheck();
       }
+    };
+
+    // Notify server of active slug switch, then mount
+    this.http.post(`/api/_sutram/master/projects/switch/${encodeURIComponent(project.project_slug)}`, {}).subscribe({
+      next: () => finishMount(),
+      error: () => finishMount()
     });
   }
 

@@ -41,6 +41,7 @@ const TriggerManager = require('./TriggerManager');
 const ReportManager = require('./ReportManager');
 const UiManager = require('./UiManager');
 const ReminderManager = require('./ReminderManager');
+const AuthManager = require('./AuthManager');
 const buildRouter = require('./RouterBuilder');
 
 class Engine {
@@ -123,6 +124,7 @@ class Engine {
         this.ui = new UiManager(this);
         this.reminder = new ReminderManager(this);
         this.reminders = this.reminder;
+        this.auth = new AuthManager(this);
     }
 
     // Polymorphic Core metadata getters (zero dialect branching)

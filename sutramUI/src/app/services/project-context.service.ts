@@ -8,7 +8,17 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { BehaviorSubject, Observable, map, tap, catchError, of, throwError } from 'rxjs';
-import { ProjectItem, MasterUser, InProjectUser, ProjectCreatePayload, ProjectMember, DbInspectionReport, MySqlDatabaseItem } from '../models/project.model';
+import {
+  ProjectItem,
+  MasterUser,
+  InProjectUser,
+  ProjectCreatePayload,
+  ProjectMember,
+  DbInspectionReport,
+  MySqlDatabaseItem,
+  ProjectTableRight,
+  ProjectSessionState
+} from '../models/project.model';
 
 @Injectable({
   providedIn: 'root'
@@ -29,56 +39,169 @@ export class ProjectContextService {
   private inProjectUserSubject = new BehaviorSubject<InProjectUser | null>(null);
   public inProjectUser$ = this.inProjectUserSubject.asObservable();
 
+  private masterTokenValue: string = '';
+  private lanTokenValue: string = '';
+  private pendingLanProjectSlug: string = '';
+  private projectSessionsMap: { [slug: string]: ProjectSessionState } = {};
+  private projectUnmaskTokensMap: { [slug: string]: string[] } = {};
+
   constructor(private http: HttpClient) {
     this._restoreSession();
   }
 
+  private _purgeLegacyLocalAuth(): void {
+    try {
+      const legacyKeys = [
+        'sutram_master_user',
+        'sutram_master_token',
+        'sutram_open_projects',
+        'sutram_active_project',
+        'sutram_active_user',
+        'sutram_cached_projects'
+      ];
+      for (const k of legacyKeys) {
+        localStorage.removeItem(k);
+      }
+    } catch {}
+  }
+
+  private _persistProjectSessions(): void {
+    try {
+      sessionStorage.setItem('sutram_project_sessions', JSON.stringify(this.projectSessionsMap));
+    } catch {}
+  }
+
+  private _persistUnmaskTokens(): void {
+    try {
+      sessionStorage.setItem('sutram_project_unmask_tokens', JSON.stringify(this.projectUnmaskTokensMap));
+    } catch {}
+  }
+
   private _restoreSession(): void {
     try {
-      const savedUser = localStorage.getItem('sutram_master_user');
-      if (savedUser) {
+      // Never auto-restore credentials from permanent localStorage (window close must force login)
+      this._purgeLegacyLocalAuth();
+
+      // Parse optional LAN direct link hash: #project=<slug>&lanToken=<token>
+      if (typeof window !== 'undefined' && window.location.hash) {
+        const hashStr = window.location.hash.replace(/^#/, '');
+        const params = new URLSearchParams(hashStr);
+        const hashProj = (params.get('project') || '').trim();
+        const hashLanToken = (params.get('lanToken') || '').trim();
+        if (hashProj) {
+          this.pendingLanProjectSlug = hashProj;
+        }
+        if (hashLanToken) {
+          this.lanTokenValue = hashLanToken;
+          sessionStorage.setItem('sutram_lan_token', hashLanToken);
+          // Scrub sensitive token from URL bar cleanly
+          try {
+            window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#project=${encodeURIComponent(hashProj)}`);
+          } catch {}
+        }
+      }
+
+      if (!this.lanTokenValue) {
+        this.lanTokenValue = sessionStorage.getItem('sutram_lan_token') || '';
+      }
+
+      const savedToken = sessionStorage.getItem('sutram_master_token') || '';
+      const savedUser = sessionStorage.getItem('sutram_master_user');
+      if (savedUser && savedToken) {
         try {
           const u = JSON.parse(savedUser);
           if (u && u.username) {
+            this.masterTokenValue = savedToken;
             this.masterUserSubject.next(u);
           }
         } catch {}
       }
-      const savedProjects = localStorage.getItem('sutram_cached_projects');
-      if (savedProjects) {
-        const pList = JSON.parse(savedProjects);
-        if (Array.isArray(pList) && pList.length > 0) {
-          this.projectsSubject.next(pList);
-        }
+
+      const savedSessions = sessionStorage.getItem('sutram_project_sessions');
+      if (savedSessions) {
+        try {
+          const parsed = JSON.parse(savedSessions);
+          if (parsed && typeof parsed === 'object') {
+            this.projectSessionsMap = parsed;
+          }
+        } catch {}
       }
-      const savedOpen = localStorage.getItem('sutram_open_projects');
+
+      const savedUnmask = sessionStorage.getItem('sutram_project_unmask_tokens');
+      if (savedUnmask) {
+        try {
+          const parsed = JSON.parse(savedUnmask);
+          if (parsed && typeof parsed === 'object') {
+            this.projectUnmaskTokensMap = parsed;
+          }
+        } catch {}
+      }
+
+      const savedOpen = sessionStorage.getItem('sutram_open_projects');
       if (savedOpen) {
         const list = JSON.parse(savedOpen);
         if (Array.isArray(list) && list.length > 0) {
           this.openProjectsSubject.next(list);
         }
       }
-      const savedProject = localStorage.getItem('sutram_active_project');
+
+      const savedProject = sessionStorage.getItem('sutram_active_project');
       if (savedProject) {
         const p = JSON.parse(savedProject);
-        this.activeProjectSubject.next(p);
-        const currentList = this.openProjectsSubject.value;
-        if (!currentList.some(item => item.project_slug === p.project_slug)) {
-          this.openProjectsSubject.next([...currentList, p]);
+        if (p && p.project_slug) {
+          this.activeProjectSubject.next(p);
+          const currentList = this.openProjectsSubject.value;
+          if (!currentList.some(item => item.project_slug === p.project_slug)) {
+            this.openProjectsSubject.next([...currentList, p]);
+          }
+          const sess = this.projectSessionsMap[p.project_slug];
+          this.inProjectUserSubject.next(sess?.user || null);
         }
       }
 
-      // Safely schedule background async network calls outside the constructor
+      // Safely verify master/project session outside constructor
       setTimeout(() => {
-        const currentActive = this.activeProject;
-        if (currentActive) {
-          this.http.post(`/api/_sutram/master/projects/switch/${encodeURIComponent(currentActive.project_slug)}`, {}).subscribe({
-            next: () => console.log(`[ProjectContextService] Restored server active connection to "${currentActive.project_slug}"`),
-            error: (err) => console.warn(`[ProjectContextService] Server restore error:`, err?.message || err)
+        if (this.masterTokenValue) {
+          this.http.get<{ success: boolean; result?: MasterUser }>('/api/_sutram/master/me').subscribe({
+            next: (res) => {
+              if (res && res.success && res.result) {
+                this.masterUserSubject.next({ ...res.result, token: this.masterTokenValue });
+                sessionStorage.setItem('sutram_master_user', JSON.stringify(this.masterUserSubject.value));
+                this.loadProjects().subscribe({
+                  next: (pRes) => {
+                    if (this.pendingLanProjectSlug && pRes?.result) {
+                      const targetProj = pRes.result.find(item => item.project_slug === this.pendingLanProjectSlug);
+                      if (targetProj) this.openProject(targetProj);
+                    }
+                  }
+                });
+              } else {
+                this.logoutMasterUser();
+              }
+            },
+            error: () => {
+              this.logoutMasterUser();
+            }
+          });
+        } else if (this.pendingLanProjectSlug) {
+          // Remote LAN direct project entry (via x-lan-token or open LAN share)
+          this.http.get<{ success: boolean; result?: ProjectItem }>(
+            `/api/_sutram/master/projects/${encodeURIComponent(this.pendingLanProjectSlug)}`
+          ).subscribe({
+            next: (res) => {
+              if (res && res.success && res.result) {
+                this.openProject(res.result);
+              }
+            },
+            error: (err) => console.warn('[ProjectContextService] LAN project fetch error:', err?.message || err)
           });
         }
-        if (this.isAuthenticated) {
-          this.loadProjects().subscribe();
+
+        const currentActive = this.activeProject;
+        if (currentActive && this.isProjectAuthenticated(currentActive.project_slug)) {
+          this.http.post(`/api/_sutram/master/projects/switch/${encodeURIComponent(currentActive.project_slug)}`, {}).subscribe({
+            error: (err) => console.warn(`[ProjectContextService] Server restore error:`, err?.message || err)
+          });
         }
       }, 0);
     } catch (e) {
@@ -87,7 +210,98 @@ export class ProjectContextService {
   }
 
   public get isAuthenticated(): boolean {
-    return !!this.masterUserSubject.value;
+    if (this.masterUserSubject.value && this.masterTokenValue) return true;
+    // Allow direct LAN shared workspace access cleanly when launched via LAN peer link
+    if ((this.lanTokenValue || this.pendingLanProjectSlug) && this.activeProjectSubject.value) {
+      return true;
+    }
+    return false;
+  }
+
+  public getMasterToken(): string {
+    return this.masterTokenValue || sessionStorage.getItem('sutram_master_token') || '';
+  }
+
+  public getLanToken(): string {
+    return this.lanTokenValue || sessionStorage.getItem('sutram_lan_token') || '';
+  }
+
+  public getProjectSession(slug?: string | null): ProjectSessionState | null {
+    if (!slug) return null;
+    if (this.projectSessionsMap[slug]) return this.projectSessionsMap[slug];
+    try {
+      const raw = sessionStorage.getItem('sutram_project_sessions');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed[slug]) {
+          this.projectSessionsMap = parsed;
+          return parsed[slug];
+        }
+      }
+    } catch {}
+    return null;
+  }
+
+  public isProjectAuthenticated(slug?: string | null): boolean {
+    const sess = this.getProjectSession(slug);
+    return !!(sess && sess.token && sess.user);
+  }
+
+  public getProjectToken(slug?: string | null): string {
+    return this.getProjectSession(slug)?.token || '';
+  }
+
+  public setProjectSession(slug: string, session: ProjectSessionState): void {
+    if (!slug) return;
+    this.projectSessionsMap[slug] = {
+      ...session,
+      projectSlug: slug
+    };
+    this._persistProjectSessions();
+    if (this.activeProject?.project_slug === slug) {
+      this.inProjectUserSubject.next(session.user || null);
+    }
+  }
+
+  public clearProjectAuth(slug?: string | null): void {
+    if (!slug) return;
+    delete this.projectSessionsMap[slug];
+    this._persistProjectSessions();
+    this.clearUnmaskTokens(slug);
+    if (this.activeProject?.project_slug === slug) {
+      this.inProjectUserSubject.next(null);
+    }
+  }
+
+  public addUnmaskToken(slug: string, token: string): void {
+    if (!slug || !token) return;
+    const list = this.getUnmaskTokens(slug);
+    if (!list.includes(token)) {
+      this.projectUnmaskTokensMap[slug] = [...list, token];
+      this._persistUnmaskTokens();
+    }
+  }
+
+  public getUnmaskTokens(slug?: string | null): string[] {
+    if (!slug) return [];
+    if (Array.isArray(this.projectUnmaskTokensMap[slug])) return this.projectUnmaskTokensMap[slug];
+    try {
+      const raw = sessionStorage.getItem('sutram_project_unmask_tokens');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && Array.isArray(parsed[slug])) {
+          this.projectUnmaskTokensMap = parsed;
+          return parsed[slug];
+        }
+      }
+    } catch {}
+    return [];
+  }
+
+  public clearUnmaskTokens(slug?: string | null): void {
+    if (!slug) return;
+    delete this.projectUnmaskTokensMap[slug];
+    this._persistUnmaskTokens();
   }
 
   public get canCreateProject(): boolean {
@@ -128,7 +342,15 @@ export class ProjectContextService {
   }
 
   public logoutMasterUser(): void {
-    localStorage.removeItem('sutram_master_user');
+    this.masterTokenValue = '';
+    this.lanTokenValue = '';
+    this.pendingLanProjectSlug = '';
+    try {
+      sessionStorage.removeItem('sutram_master_user');
+      sessionStorage.removeItem('sutram_master_token');
+      sessionStorage.removeItem('sutram_lan_token');
+    } catch {}
+    this._purgeLegacyLocalAuth();
     this.masterUserSubject.next(null);
     this.closeAllProjects();
   }
@@ -143,7 +365,9 @@ export class ProjectContextService {
     if (!exists) {
       const updated = [...list, project];
       this.openProjectsSubject.next(updated);
-      localStorage.setItem('sutram_open_projects', JSON.stringify(updated));
+      try {
+        sessionStorage.setItem('sutram_open_projects', JSON.stringify(updated));
+      } catch {}
     }
     this.setActiveProject(project);
   }
@@ -151,7 +375,12 @@ export class ProjectContextService {
   public closeProject(slug: string): void {
     const list = this.openProjectsSubject.value.filter(p => p.project_slug !== slug);
     this.openProjectsSubject.next(list);
-    localStorage.setItem('sutram_open_projects', JSON.stringify(list));
+    try {
+      sessionStorage.setItem('sutram_open_projects', JSON.stringify(list));
+    } catch {}
+
+    // Closing a project locks it so reopening asks for its project password again
+    this.clearProjectAuth(slug);
 
     if (this.activeProject?.project_slug === slug) {
       if (list.length > 0) {
@@ -164,21 +393,31 @@ export class ProjectContextService {
 
   public closeAllProjects(): void {
     this.openProjectsSubject.next([]);
-    localStorage.removeItem('sutram_open_projects');
+    this.projectSessionsMap = {};
+    this._persistProjectSessions();
+    this.projectUnmaskTokensMap = {};
+    this._persistUnmaskTokens();
+    try {
+      sessionStorage.removeItem('sutram_open_projects');
+    } catch {}
     this.setActiveProject(null);
   }
 
   public setActiveProject(project: ProjectItem | null): void {
     this.activeProjectSubject.next(project);
     if (project) {
-      localStorage.setItem('sutram_active_project', JSON.stringify(project));
+      try {
+        sessionStorage.setItem('sutram_active_project', JSON.stringify(project));
+      } catch {}
       const list = this.openProjectsSubject.value;
       if (!list.some(p => p.project_slug === project.project_slug)) {
         const updated = [...list, project];
         this.openProjectsSubject.next(updated);
-        localStorage.setItem('sutram_open_projects', JSON.stringify(updated));
+        try {
+          sessionStorage.setItem('sutram_open_projects', JSON.stringify(updated));
+        } catch {}
       }
-      // Notify server immediately to switch active database connection
+      // Notify server to sync active database slug context if authenticated
       this.http.post(`/api/_sutram/master/projects/switch/${encodeURIComponent(project.project_slug)}`, {}).subscribe({
         next: () => {
           console.log(`[ProjectContextService] Switched server active database to "${project.project_slug}"`);
@@ -187,25 +426,35 @@ export class ProjectContextService {
           console.warn(`[ProjectContextService] Server switch error:`, err?.message || err);
         }
       });
-      // Reset in-project user to default project admin
-      this.inProjectUserSubject.next({
-        _id: 1,
-        username: 'admin',
-        display_name: 'Project Admin',
-        role: 'admin',
-        active: 1
-      });
+      // Sync strictly from per-project verified session (never auto-admin!)
+      const existingSess = this.getProjectSession(project.project_slug);
+      this.inProjectUserSubject.next(existingSess?.user || null);
     } else {
-      localStorage.removeItem('sutram_active_project');
+      try {
+        sessionStorage.removeItem('sutram_active_project');
+      } catch {}
       this.inProjectUserSubject.next(null);
     }
   }
 
   public setMasterUser(user: MasterUser): void {
+    this.masterTokenValue = user?.token || this.masterTokenValue || '';
     this.masterUserSubject.next(user);
-    localStorage.setItem('sutram_master_user', JSON.stringify(user));
+    try {
+      if (this.masterTokenValue) {
+        sessionStorage.setItem('sutram_master_token', this.masterTokenValue);
+      }
+      sessionStorage.setItem('sutram_master_user', JSON.stringify(user));
+    } catch {}
     // Reload projects for this user
-    this.loadProjects().subscribe();
+    this.loadProjects().subscribe({
+      next: (pRes) => {
+        if (this.pendingLanProjectSlug && pRes?.result) {
+          const targetProj = pRes.result.find(item => item.project_slug === this.pendingLanProjectSlug);
+          if (targetProj) this.openProject(targetProj);
+        }
+      }
+    });
   }
 
   public setInProjectUser(user: InProjectUser | null): void {
@@ -216,7 +465,7 @@ export class ProjectContextService {
    * Loads accessible projects from server
    */
   public loadProjects(): Observable<{ success: boolean; result: ProjectItem[] }> {
-    if (!this.isAuthenticated) {
+    if (!this.masterUserSubject.value || !this.masterTokenValue) {
       this.projectsSubject.next([]);
       return of({ success: true, result: [] });
     }
@@ -225,9 +474,6 @@ export class ProjectContextService {
       tap(res => {
         if (res && res.success && Array.isArray(res.result)) {
           this.projectsSubject.next(res.result);
-          try {
-            localStorage.setItem('sutram_cached_projects', JSON.stringify(res.result));
-          } catch {}
           // If active project is open, refresh its metadata
           const current = this.activeProject;
           if (current) {

@@ -16,6 +16,7 @@
 
 const SysMigrator = require('./SysMigrator');
 const SchemaHeuristics = require('./SchemaHeuristics');
+const AuthManager = require('./AuthManager');
 
 class DatabaseAdopter {
   constructor(dbOrAdapter) {
@@ -53,7 +54,11 @@ class DatabaseAdopter {
     };
 
     const cleanUsername = String(adminCredentials.username || 'admin').trim();
-    const cleanPassword = adminCredentials.password ? String(adminCredentials.password).trim() : 'admin';
+    const hasExplicitPass = Object.prototype.hasOwnProperty.call(adminCredentials || {}, 'password') &&
+      adminCredentials.password !== undefined && adminCredentials.password !== null;
+    const rawPass = hasExplicitPass ? String(adminCredentials.password).trim() : 'admin';
+    const hashedPass = AuthManager.hashPassword(rawPass);
+    const adminMisc = AuthManager.stringifyMisc({ can_ocr: 1, is_blank_password: rawPass === '' });
     const cleanDisplayName = adminCredentials.displayName || `${cleanUsername} Administrator`;
 
     // 1. Ensure Sys Migrations
@@ -72,17 +77,18 @@ class DatabaseAdopter {
 
     if (tablesToAdopt.length === 0) {
       log('CHECK', 'All user tables are already registered in sys_table.');
-      if (adminCredentials.password) {
+      if (hasExplicitPass) {
         try {
           db.prepare(`
-            INSERT INTO sys_user (username, password, display_name, role, active)
-            VALUES (?, ?, ?, 'admin', 1)
+            INSERT INTO sys_user (username, password, display_name, role, active, misc_settings)
+            VALUES (?, ?, ?, 'admin', 1, ?)
             ON CONFLICT(username) DO UPDATE SET
               password = excluded.password,
               display_name = excluded.display_name,
               role = 'admin',
-              active = 1
-          `).run(cleanUsername, cleanPassword, cleanDisplayName);
+              active = 1,
+              misc_settings = excluded.misc_settings
+          `).run(cleanUsername, hashedPass, cleanDisplayName, adminMisc);
           log('USER', `Updated project administrator (${cleanUsername}).`);
         } catch (err) {
           log('WARN', `Could not update admin in sys_user: ${err.message}`);
@@ -176,14 +182,15 @@ class DatabaseAdopter {
       }
 
       db.prepare(`
-        INSERT INTO sys_user (username, password, display_name, role, active)
-        VALUES (?, ?, ?, 'admin', 1)
+        INSERT INTO sys_user (username, password, display_name, role, active, misc_settings)
+        VALUES (?, ?, ?, 'admin', 1, ?)
         ON CONFLICT(username) DO UPDATE SET
           password = excluded.password,
           display_name = excluded.display_name,
           role = 'admin',
-          active = 1
-      `).run(cleanUsername, cleanPassword, cleanDisplayName);
+          active = 1,
+          misc_settings = excluded.misc_settings
+      `).run(cleanUsername, hashedPass, cleanDisplayName, adminMisc);
 
       if (needTx) db.prepare('COMMIT').run();
       log('SUCCESS', `Adoption complete! Total active tables: ${allUserTables.length}.`);
@@ -211,7 +218,11 @@ class DatabaseAdopter {
     };
 
     const cleanUsername = String(adminCredentials.username || 'admin').trim();
-    const cleanPassword = adminCredentials.password ? String(adminCredentials.password).trim() : 'admin';
+    const hasExplicitPass = Object.prototype.hasOwnProperty.call(adminCredentials || {}, 'password') &&
+      adminCredentials.password !== undefined && adminCredentials.password !== null;
+    const rawPass = hasExplicitPass ? String(adminCredentials.password).trim() : 'admin';
+    const hashedPass = AuthManager.hashPassword(rawPass);
+    const adminMisc = AuthManager.stringifyMisc({ can_ocr: 1, is_blank_password: rawPass === '' });
     const cleanDisplayName = adminCredentials.displayName || `${cleanUsername} Administrator`;
 
     // 1. Ensure Sys Migrations
@@ -229,17 +240,18 @@ class DatabaseAdopter {
 
     if (tablesToAdopt.length === 0) {
       log('CHECK', 'All user tables are already registered in sys_table.');
-      if (adminCredentials.password) {
+      if (hasExplicitPass) {
         try {
           await adapter.run(`
-            INSERT INTO sys_user (username, password, display_name, role, active)
-            VALUES (?, ?, ?, 'admin', 1)
+            INSERT INTO sys_user (username, password, display_name, role, active, misc_settings)
+            VALUES (?, ?, ?, 'admin', 1, ?)
             ON DUPLICATE KEY UPDATE
               password = VALUES(password),
               display_name = VALUES(display_name),
               role = 'admin',
-              active = 1
-          `, [cleanUsername, cleanPassword, cleanDisplayName]);
+              active = 1,
+              misc_settings = VALUES(misc_settings)
+          `, [cleanUsername, hashedPass, cleanDisplayName, adminMisc]);
           log('USER', `Updated project administrator (${cleanUsername}).`);
         } catch (err) {
           log('WARN', `Could not update admin in sys_user: ${err.message}`);
@@ -327,14 +339,15 @@ class DatabaseAdopter {
     }
 
     await adapter.run(`
-      INSERT INTO sys_user (username, password, display_name, role, active)
-      VALUES (?, ?, ?, 'admin', 1)
+      INSERT INTO sys_user (username, password, display_name, role, active, misc_settings)
+      VALUES (?, ?, ?, 'admin', 1, ?)
       ON DUPLICATE KEY UPDATE
         password = VALUES(password),
         display_name = VALUES(display_name),
         role = 'admin',
-        active = 1
-    `, [cleanUsername, cleanPassword, cleanDisplayName]);
+        active = 1,
+        misc_settings = VALUES(misc_settings)
+    `, [cleanUsername, hashedPass, cleanDisplayName, adminMisc]);
 
     log('SUCCESS', `MySQL Adoption complete! Total active tables: ${allUserTables.length}.`);
     return {

@@ -469,16 +469,16 @@ export class SutramExcelApiService {
   /**
    * POST /api/_sutram/auth/login
    */
-  public login(credentials: { username: string; password: string }): Observable<ApiResponse<{ user: any; rights: any[] }>> {
-    return this.http.post<ApiResponse<{ user: any; rights: any[] }>>(this.buildApiUrl('/api/_sutram/auth/login'), credentials);
+  public login(credentials: { username: string; password: string }): Observable<ApiResponse<{ user: any; rights: any[]; token?: string }>> {
+    return this.http.post<ApiResponse<{ user: any; rights: any[]; token?: string }>>(this.buildApiUrl('/api/_sutram/auth/login'), credentials);
   }
 
   /**
    * GET /api/_sutram/auth/me
    */
-  public getMe(user?: string | number): Observable<ApiResponse<{ user: any; rights: any[] }>> {
+  public getMe(user?: string | number): Observable<ApiResponse<{ user: any; rights: any[]; token?: string }>> {
     const query = user ? `?username=${encodeURIComponent(user)}` : '';
-    return this.http.get<ApiResponse<{ user: any; rights: any[] }>>(this.buildApiUrl(`/api/_sutram/auth/me${query}`));
+    return this.http.get<ApiResponse<{ user: any; rights: any[]; token?: string }>>(this.buildApiUrl(`/api/_sutram/auth/me${query}`));
   }
 
   /**

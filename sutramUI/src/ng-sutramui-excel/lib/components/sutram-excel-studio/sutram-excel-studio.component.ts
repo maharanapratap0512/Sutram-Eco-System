@@ -131,6 +131,7 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
   }
 
   public getActiveProjectSlug(): string {
+    if (this.projectSlug) return this.projectSlug;
     if (this._apiBase && this._apiBase.includes('?')) {
       const q = this._apiBase.split('?')[1] || '';
       const params = new URLSearchParams(q);
@@ -138,13 +139,17 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
       if (p) return p;
     }
     try {
-      const raw = localStorage.getItem('sutram_active_project');
+      const raw = sessionStorage.getItem('sutram_active_project');
       if (raw) {
         const p = JSON.parse(raw);
         if (p && p.project_slug) return p.project_slug;
       }
     } catch { }
     return 'default';
+  }
+
+  public getResolvedProjectSlug(): string {
+    return this.getActiveProjectSlug();
   }
 
   @Output() public tableCreated = new EventEmitter<string>();
@@ -352,9 +357,23 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
   @Input() enableSearch: boolean = true;
   @Input() enableControlBar: boolean = true;
   @Input() enableAuth: boolean = false;
+  @Input() projectSlug: string = '';
+
+  @Output() sessionAuthenticated = new EventEmitter<{ projectSlug: string; user: any; rights: any[]; token: string }>();
+  @Output() sessionLocked = new EventEmitter<string>();
 
   public showAuthDialog: boolean = false;
   public authDialogCanDismiss: boolean = true;
+  public projectSessionToken: string = '';
+  public lockUsername: string = '';
+  public lockPassword: string = '';
+  public lockErrorMessage: string = '';
+  public isLockAuthenticating: boolean = false;
+
+  public get isProjectAuthenticated(): boolean {
+    if (!this.enableAuth) return true;
+    return !!(this.currentUser && this.projectSessionToken);
+  }
   @Input() enableStatsBar: boolean = true;
   @Input() enableUpload: boolean = true;
   @Input() enableAudit: boolean = true;
@@ -1392,67 +1411,112 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
       this.booleanDisplayStyle = savedBoolStyle as any;
     }
 
-    // Load persisted active user and role
-    const savedActiveUser = localStorage.getItem('sutram_active_user');
-    let hasLoadedUser = false;
-    if (savedActiveUser) {
-      try {
-        const parsed = JSON.parse(savedActiveUser);
-        if (parsed && (parsed.role === 'admin' || parsed.role === 'author')) {
-          this.currentUser = parsed;
-          hasLoadedUser = true;
-        }
-      } catch { }
-    }
-    this.loadCurrentUserRights();
-
-    if (this.enableAuth && !hasLoadedUser) {
-      this.openAuthDialog(false);
-    }
+    // Never restore project auth from permanent localStorage
+    try { localStorage.removeItem('sutram_active_user'); } catch {}
 
     this.state.isAuditMode.set(this.mode === 'intelligent');
     this.state.filtersEnabled.set(this.enableFilters);
     this.state.sortingEnabled.set(this.enableSorting);
 
-    // Refresh saved local sheets list from localStorage
-    this.refreshSavedSheetsList();
+    if (this.enableAuth) {
+      this._restoreOrLockProjectSession();
+      return;
+    }
 
-    // Debounced direct database search
-    this.searchSub = this.searchSubject.pipe(
-      debounceTime(300),
-      distinctUntilChanged()
-    ).subscribe((query: string) => {
-      this.state.dbSearchQuery.set(query);
-      if (this.selectedTableName) {
-        this.loadDataChunk(this.selectedTableName, 0, 100, true);
-      }
-    });
+    // Standalone unauthenticated demo mode (only when [enableAuth]="false")
+    this.currentUser = { username: 'admin', display_name: 'Administrator', role: 'admin', can_ocr: 1 };
+    this._initializeAuthenticatedWorkspace();
+  }
 
-    // Reactive listener: automatically re-audit current grid rows whenever a referenced FK dataset finishes caching
-    this.refLoadedSub = this.refCache.tableLoaded$.subscribe((loadedTable: string) => {
-      const cfg = this.state.config();
-      if (!cfg || !cfg.headers) return;
-      const cleanLoaded = (loadedTable || '').toLowerCase().trim();
-      const hasRef = cfg.headers.some((h: any) => (h.ref_table || '').toLowerCase().trim() === cleanLoaded);
-      if (hasRef) {
-        const rows = this.state.rows();
-        if (rows && rows.length > 0) {
-          this.allConfigColumns
-            .filter(c => c.is_fk_subcol && (c.ref_table || '').toLowerCase().trim() === cleanLoaded && this.selectedColumnKeys.has(c.key))
-            .forEach(c => this.ensureRowCellsForColumn(c.key));
-          this.audit.auditAll(rows, cfg.headers);
-          this.state.setRows([...rows]);
-          this.cdr.markForCheck();
+  private _workspaceInitialized: boolean = false;
+
+  private _restoreOrLockProjectSession(): void {
+    const slug = this.getResolvedProjectSlug();
+    try {
+      const rawSessions = sessionStorage.getItem('sutram_project_sessions');
+      if (rawSessions) {
+        const parsed = JSON.parse(rawSessions);
+        const sess = parsed?.[slug];
+        if (sess && sess.token && sess.user) {
+          this.projectSessionToken = sess.token;
+          // Verify token strictly with backend before unlocking & loading any data
+          this.api.getMe().subscribe({
+            next: (res) => {
+              if (res && res.success && res.result?.user) {
+                this._applyAuthenticatedResult({
+                  user: res.result.user,
+                  rights: res.result.rights || [],
+                  token: sess.token
+                }, false);
+              } else {
+                this.lockSession();
+              }
+            },
+            error: () => {
+              this.lockSession();
+            }
+          });
+          return;
         }
       }
-    });
+    } catch {}
+
+    // No valid session in sessionStorage -> keep opaque Project Lock Gate up with zero API/data fetches
+    this.currentUser = null;
+    this.projectSessionToken = '';
+    this.tablesList = [];
+    this.cdr.markForCheck();
+  }
+
+  private _initializeAuthenticatedWorkspace(): void {
+    this.loadCurrentUserRights();
+    this.refreshSavedSheetsList();
+
+    if (!this._workspaceInitialized) {
+      this._workspaceInitialized = true;
+
+      // Debounced direct database search
+      this.searchSub = this.searchSubject.pipe(
+        debounceTime(300),
+        distinctUntilChanged()
+      ).subscribe((query: string) => {
+        this.state.dbSearchQuery.set(query);
+        if (this.selectedTableName) {
+          this.loadDataChunk(this.selectedTableName, 0, 100, true);
+        }
+      });
+
+      // Reactive listener: automatically re-audit current grid rows whenever a referenced FK dataset finishes caching
+      this.refLoadedSub = this.refCache.tableLoaded$.subscribe((loadedTable: string) => {
+        const cfg = this.state.config();
+        if (!cfg || !cfg.headers) return;
+        const cleanLoaded = (loadedTable || '').toLowerCase().trim();
+        const hasRef = cfg.headers.some((h: any) => (h.ref_table || '').toLowerCase().trim() === cleanLoaded);
+        if (hasRef) {
+          const rows = this.state.rows();
+          if (rows && rows.length > 0) {
+            this.allConfigColumns
+              .filter(c => c.is_fk_subcol && (c.ref_table || '').toLowerCase().trim() === cleanLoaded && this.selectedColumnKeys.has(c.key))
+              .forEach(c => this.ensureRowCellsForColumn(c.key));
+            this.audit.auditAll(rows, cfg.headers);
+            this.state.setRows([...rows]);
+            this.cdr.markForCheck();
+          }
+        }
+      });
+    }
 
     this.loadTablesList();
 
-    // Check active reminders on startup & pulse every 45s
+    // Check active reminders on startup & pulse every 45s (only while authenticated)
+    if (this.reminderPollingTimer) {
+      clearInterval(this.reminderPollingTimer);
+    }
     this.checkActiveReminders(true);
     this.reminderPollingTimer = setInterval(() => {
-      this.checkActiveReminders(false);
+      if (!this.enableAuth || this.isProjectAuthenticated) {
+        this.checkActiveReminders(false);
+      }
     }, 45000);
   }
 
@@ -1853,12 +1917,7 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
   };
 
   // 4. Role & User Management (Frontend Rights Control)
-  public currentUser: { username: string; display_name: string; role: 'admin' | 'author'; can_ocr?: number | boolean } = {
-    username: 'admin',
-    display_name: 'Administrator',
-    role: 'admin',
-    can_ocr: 1
-  };
+  public currentUser: { _id?: number; username: string; display_name: string; role: 'admin' | 'author'; can_ocr?: number | boolean } | null = null;
   public showUserManagementModal: boolean = false;
   public usersList: any[] = [];
   public isLoadingUsers: boolean = false;
@@ -1904,53 +1963,147 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
   }
 
   public lockSession(): void {
-    this.authDialogCanDismiss = false;
-    this.showAuthDialog = true;
-    this.cdr.markForCheck();
-  }
-
-  public onAuthenticated(event: { user: any; rights: any[] }): void {
-    if (event && event.user) {
-      this.currentUser = {
-        username: event.user.username,
-        display_name: event.user.display_name || event.user.username,
-        role: event.user.role || 'author',
-        can_ocr: event.user.can_ocr !== undefined ? event.user.can_ocr : 1
-      };
-      try {
-        localStorage.setItem('sutram_active_user', JSON.stringify(this.currentUser));
-      } catch { }
-
-      this.currentUserRightsMap.clear();
-      if (Array.isArray(event.rights)) {
-        event.rights.forEach((r: any) => {
-          this.currentUserRightsMap.set(r.table_name, {
-            can_view: r.can_view !== 0 && r.can_view !== false,
-            can_edit: r.can_edit !== 0 && r.can_edit !== false,
-            can_delete: r.can_delete !== 0 && r.can_delete !== false,
-            can_unmask: r.can_unmask !== 0 && r.can_unmask !== false
-          });
-        });
+    const slug = this.getResolvedProjectSlug();
+    this.currentUser = null;
+    this.projectSessionToken = '';
+    this.lockPassword = '';
+    this.lockErrorMessage = '';
+    this.currentUserRightsMap.clear();
+    this.tablesList = [];
+    this.sheetTabs = [];
+    this.activeAlerts = [];
+    this.showAuthDialog = false;
+    if (this.reminderPollingTimer) {
+      clearInterval(this.reminderPollingTimer);
+      this.reminderPollingTimer = undefined;
+    }
+    try {
+      const raw = sessionStorage.getItem('sutram_project_sessions');
+      if (raw && slug) {
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed[slug]) {
+          delete parsed[slug];
+          sessionStorage.setItem('sutram_project_sessions', JSON.stringify(parsed));
+        }
       }
-      this.applyUserRightsToCurrentView();
-      this.showAuthDialog = false;
+      const rawUnmask = sessionStorage.getItem('sutram_project_unmask_tokens');
+      if (rawUnmask && slug) {
+        const parsedU = JSON.parse(rawUnmask);
+        if (parsedU && parsedU[slug]) {
+          delete parsedU[slug];
+          sessionStorage.setItem('sutram_project_unmask_tokens', JSON.stringify(parsedU));
+        }
+      }
+    } catch {}
+    this.sessionLocked.emit(slug);
+    this.cdr.markForCheck();
+  }
+
+  public onLockGateLogin(): void {
+    this.lockErrorMessage = '';
+    if (!this.lockUsername || !this.lockUsername.trim()) {
+      this.lockErrorMessage = 'यूज़रनेम आवश्यक है (Username is required)';
       this.cdr.markForCheck();
+      return;
+    }
+
+    this.isLockAuthenticating = true;
+    this.cdr.markForCheck();
+
+    this.api.login({
+      username: this.lockUsername.trim(),
+      password: (this.lockPassword ?? '').trim()
+    }).subscribe({
+      next: (res: any) => {
+        this.isLockAuthenticating = false;
+        if (res && res.success && res.result) {
+          this.lockPassword = '';
+          this._applyAuthenticatedResult(res.result, true);
+        } else {
+          this.lockErrorMessage = res?.error || 'अमान्य यूज़रनेम या पासवर्ड (Invalid username or password)';
+        }
+        this.cdr.markForCheck();
+      },
+      error: (err: any) => {
+        this.isLockAuthenticating = false;
+        this.lockErrorMessage = err?.error?.error || err?.message || 'सर्वर से कनेक्ट करने में त्रुटि (Connection error)';
+        this.cdr.markForCheck();
+      }
+    });
+  }
+
+  private _applyAuthenticatedResult(result: { user: any; rights: any[]; token?: string }, emitEvent: boolean = true): void {
+    if (!result || !result.user) return;
+    const slug = this.getResolvedProjectSlug();
+    const token = result.token || result.user?.token || this.projectSessionToken || '';
+    this.currentUser = {
+      _id: result.user._id,
+      username: result.user.username,
+      display_name: result.user.display_name || result.user.username,
+      role: result.user.role || 'author',
+      can_ocr: result.user.can_ocr !== undefined ? result.user.can_ocr : 1
+    };
+    this.projectSessionToken = token;
+
+    if (slug && token) {
+      try {
+        const raw = sessionStorage.getItem('sutram_project_sessions');
+        const map = raw ? JSON.parse(raw) : {};
+        map[slug] = {
+          projectSlug: slug,
+          user: this.currentUser,
+          rights: result.rights || [],
+          token
+        };
+        sessionStorage.setItem('sutram_project_sessions', JSON.stringify(map));
+      } catch {}
+    }
+
+    this.currentUserRightsMap.clear();
+    if (Array.isArray(result.rights)) {
+      result.rights.forEach((r: any) => {
+        this.currentUserRightsMap.set(r.table_name, {
+          can_view: r.can_view !== 0 && r.can_view !== false,
+          can_edit: r.can_edit !== 0 && r.can_edit !== false,
+          can_delete: r.can_delete !== 0 && r.can_delete !== false,
+          can_unmask: r.can_unmask !== 0 && r.can_unmask !== false
+        });
+      });
+    }
+
+    if (emitEvent && slug) {
+      this.sessionAuthenticated.emit({
+        projectSlug: slug,
+        user: this.currentUser,
+        rights: result.rights || [],
+        token
+      });
+    }
+
+    this._initializeAuthenticatedWorkspace();
+    this.applyUserRightsToCurrentView();
+    this.showAuthDialog = false;
+    this.cdr.markForCheck();
+  }
+
+  public onAuthenticated(event: { user: any; rights: any[]; token?: string }): void {
+    if (event && event.user) {
+      // Clear previous user's open tabs and unmask tokens when switching account
+      this.sheetTabs = [];
+      this.selectedTableName = '';
+      this.unmaskedColumnsSet.clear();
+      this.unmaskedCellsSet.clear();
+      this._applyAuthenticatedResult(event, true);
     }
   }
 
-  public switchRole(role: 'admin' | 'author'): void {
-    if (!this.currentUser) {
-      this.currentUser = { username: 'admin', display_name: 'Administrator', role: 'admin', can_ocr: 1 };
-    }
-    this.currentUser.role = role;
-    localStorage.setItem('sutram_active_user', JSON.stringify(this.currentUser));
-    this.loadCurrentUserRights();
-    this.applyUserRightsToCurrentView();
-    this.cdr.markForCheck();
+  public switchRole(_role: 'admin' | 'author'): void {
+    // Switching role requires real credential verification via auth dialog
+    this.openAuthDialog(true);
   }
 
   public toggleRole(): void {
-    this.switchRole(this.isAdmin ? 'author' : 'admin');
+    this.openAuthDialog(true);
   }
 
   // ── Table Config Actions ─────────────────────────────────────
@@ -2386,14 +2539,8 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
     });
   }
 
-  public setCurrentActiveUser(u: any): void {
-    this.currentUser = {
-      username: u.username,
-      display_name: u.display_name || u.username,
-      role: u.role || 'author'
-    };
-    localStorage.setItem('sutram_active_user', JSON.stringify(this.currentUser));
-    this.cdr.markForCheck();
+  public setCurrentActiveUser(_u: any): void {
+    this.openAuthDialog(true);
   }
 
   // ── Reactive Cell Changed & Highlight Auto-persistence ────────
@@ -3246,6 +3393,9 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
   }
 
   public loadTablesList(): void {
+    if (this.enableAuth && !this.isProjectAuthenticated) {
+      return;
+    }
     const savedFavs = localStorage.getItem('sutram_studio_favorites');
     if (savedFavs) {
       try {
@@ -5248,6 +5398,9 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
   }
 
   public checkActiveReminders(autoOpenPopup: boolean = true): void {
+    if (this.enableAuth && !this.isProjectAuthenticated) {
+      return;
+    }
     this.api.getActiveReminders().subscribe({
       next: (alerts: any[]) => {
         this.activeAlerts = Array.isArray(alerts) ? alerts : [];
@@ -5513,13 +5666,35 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
 
   // ── Feature 3: Author Role Rights & Permissions ───────────────
   public loadCurrentUserRights(userId?: any): void {
-    const u = userId || this.currentUser?.username;
-    if (!u) return;
-    this.api.getUserRights(u).subscribe({
-      next: (rights: any[]) => {
+    if (this.enableAuth && !this.isProjectAuthenticated) return;
+    if (userId && this.isAdmin) {
+      this.api.getUserRights(userId).subscribe({
+        next: (rights: any[]) => {
+          this.currentUserRightsMap.clear();
+          if (Array.isArray(rights)) {
+            rights.forEach(r => {
+              this.currentUserRightsMap.set(r.table_name, {
+                can_view: r.can_view !== 0 && r.can_view !== false,
+                can_edit: r.can_edit !== 0 && r.can_edit !== false,
+                can_delete: r.can_delete !== 0 && r.can_delete !== false,
+                can_unmask: r.can_unmask !== 0 && r.can_unmask !== false
+              });
+            });
+          }
+          this.applyUserRightsToCurrentView();
+          this.cdr.markForCheck();
+        },
+        error: (err) => console.warn('[SutramStudio] Error loading user rights:', err)
+      });
+      return;
+    }
+
+    this.api.getMe().subscribe({
+      next: (res: any) => {
+        const rights = res?.result?.rights || [];
         this.currentUserRightsMap.clear();
         if (Array.isArray(rights)) {
-          rights.forEach(r => {
+          rights.forEach((r: any) => {
             this.currentUserRightsMap.set(r.table_name, {
               can_view: r.can_view !== 0 && r.can_view !== false,
               can_edit: r.can_edit !== 0 && r.can_edit !== false,
@@ -5531,7 +5706,7 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
         this.applyUserRightsToCurrentView();
         this.cdr.markForCheck();
       },
-      error: (err) => console.warn('[SutramStudio] Error loading user rights:', err)
+      error: (err) => console.warn('[SutramStudio] Error loading session user rights:', err)
     });
   }
 
@@ -5649,6 +5824,21 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
       next: (res: any) => {
         this.unmaskDialogState.isSubmitting = false;
         if (res?.success) {
+          if (res.unmaskToken) {
+            const slug = this.getResolvedProjectSlug();
+            if (slug) {
+              try {
+                const rawUnmask = sessionStorage.getItem('sutram_project_unmask_tokens');
+                const map = rawUnmask ? JSON.parse(rawUnmask) : {};
+                const arr: string[] = Array.isArray(map[slug]) ? map[slug] : [];
+                if (!arr.includes(res.unmaskToken)) {
+                  arr.push(res.unmaskToken);
+                  map[slug] = arr;
+                  sessionStorage.setItem('sutram_project_unmask_tokens', JSON.stringify(map));
+                }
+              } catch {}
+            }
+          }
           if (this.unmaskDialogState.targetType === 'cell' && this.unmaskDialogState.rowIdx !== undefined) {
             const cellKey = `${this.unmaskDialogState.rowIdx}_${payload.column}`;
             this.unmaskedCellsSet.add(cellKey);
@@ -5657,6 +5847,9 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
             }
           } else {
             this.unmaskedColumnsSet.add(payload.column);
+          }
+          if (this.selectedTableName) {
+            this.loadTableDataFromDb();
           }
           this.unmaskDialogState.visible = false;
           this.cdr.markForCheck();

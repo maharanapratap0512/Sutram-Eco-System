@@ -89,6 +89,7 @@ const Engine = require('./src/Engine');
 
 module.exports = {
   SutramEngine: Engine,
+  AuthManager: require('./src/AuthManager'),
   SchemaHeuristics: require('./src/SchemaHeuristics'),
   ReminderManager: require('./src/ReminderManager'),
   DatabaseAdopter: require('./src/DatabaseAdopter')

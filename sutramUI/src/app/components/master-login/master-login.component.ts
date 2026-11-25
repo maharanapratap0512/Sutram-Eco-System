@@ -27,15 +27,11 @@ export class MasterLoginComponent {
       this.errorMessage = 'Please enter username';
       return;
     }
-    if (!this.password?.trim()) {
-      this.errorMessage = 'Please enter password';
-      return;
-    }
 
     this.isLoading = true;
     this.errorMessage = '';
 
-    this.projectContext.loginMasterUser(this.username.trim(), this.password.trim()).subscribe({
+    this.projectContext.loginMasterUser(this.username.trim(), (this.password ?? '').trim()).subscribe({
       next: (res) => {
         this.isLoading = false;
         if (res && res.success && res.result) {

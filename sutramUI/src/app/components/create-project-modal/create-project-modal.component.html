@@ -70,7 +70,7 @@
         <div class="form-group flex-1">
           <label class="form-label">
             Admin Password
-            <span class="optional-hint">(Optional - defaults to 'admin')</span>
+            <span class="optional-hint">(Optional - blank = no password)</span>
           </label>
           <p-password
             [(ngModel)]="adminPassword"
@@ -78,7 +78,7 @@
             [feedback]="false"
             styleClass="w-full p-inputtext-sm"
             inputStyleClass="w-full p-inputtext-sm"
-            placeholder="Defaults to 'admin' if left empty">
+            placeholder="Leave blank for no password">
           </p-password>
         </div>
       </div>

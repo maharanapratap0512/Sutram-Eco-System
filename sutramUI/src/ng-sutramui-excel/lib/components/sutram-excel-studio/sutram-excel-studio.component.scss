@@ -4222,6 +4222,180 @@
   }
 }
 
+// ── Opaque Full-Canvas Project Lock Gate (Rule 21 Dark Mode Compliant) ──
+.project-lock-gate {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-height: 460px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1rem;
+  background: var(--sutram-bg, #f1f5f9);
+  position: relative;
+  z-index: 30;
+}
+
+.project-lock-card {
+  width: 100%;
+  max-width: 400px;
+  padding: 2rem 1.75rem;
+  border-radius: 14px;
+  background: var(--sutram-surface, #ffffff);
+  border: 1px solid var(--sutram-border, #e2e8f0);
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.12);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+
+  .lock-icon-badge {
+    width: 52px;
+    height: 52px;
+    border-radius: 14px;
+    background: rgba(99, 102, 241, 0.12);
+    color: #6366f1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.35rem;
+    margin-bottom: 1rem;
+  }
+
+  .lock-title {
+    margin: 0 0 0.35rem;
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: var(--sutram-text, #0f172a);
+  }
+
+  .lock-subtitle {
+    margin: 0 0 1.25rem;
+    font-size: 0.82rem;
+    line-height: 1.45;
+    color: var(--sutram-text-muted, #64748b);
+  }
+
+  .lock-error-box {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 0.8rem;
+    margin-bottom: 1rem;
+    border-radius: 8px;
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    color: #ef4444;
+    font-size: 0.78rem;
+    text-align: left;
+  }
+
+  .lock-form {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.95rem;
+    text-align: left;
+  }
+
+  .lock-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+
+    label {
+      font-size: 0.77rem;
+      font-weight: 600;
+      color: var(--sutram-text-muted, #475569);
+    }
+
+    .p-input-icon-left {
+      display: block;
+      position: relative;
+      width: 100%;
+
+      > i {
+        z-index: 2;
+      }
+
+      input {
+        width: 100%;
+        padding-left: 2.25rem;
+        height: 38px;
+        box-sizing: border-box;
+      }
+    }
+
+    ::ng-deep .lock-password-wrap,
+    ::ng-deep .p-password {
+      width: 100% !important;
+      display: block !important;
+
+      .p-inputtext,
+      input {
+        width: 100% !important;
+        height: 38px !important;
+        box-sizing: border-box !important;
+      }
+    }
+  }
+
+  .lock-submit-btn {
+    margin-top: 0.35rem;
+    height: 38px;
+    font-weight: 600;
+  }
+}
+
+.sutram-excel-container.dark-mode .project-lock-gate,
+:host(.dark-mode) .project-lock-gate,
+:host-context(body.dark-mode) .project-lock-gate,
+::ng-deep body.dark-mode .project-lock-gate {
+  background: #0b1120 !important;
+}
+
+.sutram-excel-container.dark-mode .project-lock-card,
+:host(.dark-mode) .project-lock-card,
+:host-context(body.dark-mode) .project-lock-card,
+::ng-deep body.dark-mode .project-lock-card {
+  background: var(--erp-surface, #1e293b) !important;
+  border-color: var(--erp-surface-border, #334155) !important;
+  box-shadow: 0 22px 50px rgba(0, 0, 0, 0.55) !important;
+
+  .lock-title {
+    color: var(--erp-text, #f8fafc) !important;
+  }
+
+  .lock-subtitle,
+  .lock-field label {
+    color: var(--erp-text-muted, #94a3b8) !important;
+  }
+
+  .lock-field input,
+  .lock-field ::ng-deep .p-inputtext,
+  .lock-field ::ng-deep .p-password input {
+    background: rgba(15, 23, 42, 0.72) !important;
+    color: var(--erp-text, #f8fafc) !important;
+    border-color: var(--erp-surface-border, #334155) !important;
+
+    &::placeholder {
+      color: var(--erp-text-muted, #94a3b8) !important;
+    }
+
+    &:focus {
+      border-color: var(--erp-primary, #6366f1) !important;
+      box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.25) !important;
+    }
+  }
+
+  .lock-field ::ng-deep .p-password-toggle-mask-icon,
+  .lock-field .p-input-icon-left > i {
+    color: var(--erp-text-muted, #94a3b8) !important;
+  }
+}
+
 
 
 

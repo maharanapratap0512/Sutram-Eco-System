@@ -86,14 +86,12 @@ export class LanNetworkDialogComponent implements OnInit, OnDestroy {
   public confirmShareProject(): void {
     if (!this.sharingTargetProject) return;
 
-    if (this.shareAuthType === 'pin' && (!this.sharePin || this.sharePin.trim().length < 4)) {
-      this.shareError = 'Minimum 4 digits PIN required';
-      return;
-    }
-    if (this.shareAuthType === 'password' && (!this.sharePassword || this.sharePassword.trim().length < 4)) {
-      this.shareError = 'Minimum 4 characters password required';
-      return;
-    }
+    const cleanPin = (this.sharePin ?? '').trim();
+    const cleanPass = (this.sharePassword ?? '').trim();
+    const effectiveAuthType: 'none' | 'pin' | 'password' =
+      this.shareAuthType === 'pin'
+        ? (cleanPin ? 'pin' : 'none')
+        : (this.shareAuthType === 'password' ? (cleanPass ? 'password' : 'none') : 'none');
 
     this.isSubmittingShare = true;
     this.shareError = '';
@@ -101,9 +99,9 @@ export class LanNetworkDialogComponent implements OnInit, OnDestroy {
     this.lanService.shareProject({
       projectId: this.sharingTargetProject.project_slug,
       name: this.sharingTargetProject.project_name,
-      authType: this.shareAuthType,
-      pin: this.shareAuthType === 'pin' ? this.sharePin.trim() : undefined,
-      password: this.shareAuthType === 'password' ? this.sharePassword.trim() : undefined,
+      authType: effectiveAuthType,
+      pin: effectiveAuthType === 'pin' ? cleanPin : undefined,
+      password: effectiveAuthType === 'password' ? cleanPass : undefined,
       description: this.sharingTargetProject.description || ''
     }).subscribe({
       next: (res) => {

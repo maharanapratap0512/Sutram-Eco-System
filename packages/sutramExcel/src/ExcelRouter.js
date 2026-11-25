@@ -79,6 +79,24 @@ function buildExcelRouter(sutramExcel) {
         return cfg;
     }
 
+    function checkTableAccess(req, res, tableName, action = 'view') {
+        const engine = sutramExcel.engine;
+        const user = req.projectUser;
+        if (!user || !engine?.auth) return { allowed: true, ownFilter: null };
+        const rights = req.projectRights || [];
+        const eff = engine.auth.getEffectiveRights(user, tableName, rights);
+        const permMap = { view: eff.can_view, edit: eff.can_edit, delete: eff.can_delete };
+        if (!permMap[action]) {
+            res.status(403).json({
+                success: false,
+                error: `Access Denied: "${action}" permission denied for table "${tableName}".`
+            });
+            return { allowed: false, eff };
+        }
+        const ownFilter = engine.auth.getOwnershipFilter(user, tableName, rights);
+        return { allowed: true, eff, ownFilter };
+    }
+
     // ── GET /tables ───────────────────────────────────────────
     router.get('/tables', (req, res) => {
         try {
@@ -97,6 +115,10 @@ function buildExcelRouter(sutramExcel) {
             }
             const tables = Object.entries(sutramExcel._configs)
                 .filter(([name]) => !name.startsWith('sys_') && !name.startsWith('xls_') && !name.startsWith('sqlite_'))
+                .filter(([name]) => {
+                    if (!req.projectUser || !sutramExcel.engine?.auth) return true;
+                    return sutramExcel.engine.auth.getEffectiveRights(req.projectUser, name, req.projectRights || []).can_view;
+                })
                 .map(([name, cfg]) => ({
                     table:        name,
                     display_name: cfg.display_name ?? name,
@@ -154,6 +176,8 @@ function buildExcelRouter(sutramExcel) {
 
     // ── GET /config/:table ────────────────────────────────────
     router.get('/config/:table', (req, res) => {
+        const acc = checkTableAccess(req, res, req.params.table, 'view');
+        if (!acc.allowed) return;
         const cfg = getConfig(req.params.table, res);
         if (!cfg) return;
 
@@ -263,7 +287,13 @@ function buildExcelRouter(sutramExcel) {
     router.get('/ref-data/:table', async (req, res) => {
         try {
             const tblName = req.params.table;
-            const rows = await sutramExcel.engine.getAll(tblName, {}, { full: false });
+            const acc = checkTableAccess(req, res, tblName, 'view');
+            if (!acc.allowed) return;
+            const where = acc.ownFilter ? sutramExcel.engine.auth.applyOwnershipWhere({}, acc.ownFilter) : {};
+            const rawRows = await sutramExcel.engine.getAll(tblName, where, { full: false });
+            const rows = sutramExcel.engine.auth
+                ? sutramExcel.engine.auth.maskRows(tblName, rawRows, req.unmaskedCols || new Set())
+                : rawRows;
             ok(res, rows);
         } catch (e) { fail(res, e, 500); }
     });
@@ -340,6 +370,9 @@ function buildExcelRouter(sutramExcel) {
     router.get('/data/:table', async (req, res) => {
         try {
             const tblName = req.params.table;
+            const acc = checkTableAccess(req, res, tblName, 'view');
+            if (!acc.allowed) return;
+
             const isExport = req.query._export === '1' || req.query._limit === '-1' || req.query._limit === 'all';
             const limit = isExport ? null : Math.min(1000, Math.max(1, parseInt(req.query._limit, 10) || 100));
             const offset = isExport ? null : Math.max(0, parseInt(req.query._offset, 10) || 0);
@@ -374,17 +407,22 @@ function buildExcelRouter(sutramExcel) {
             }
 
             const orderBy = validSortCol ? `${validSortCol} ${order}` : null;
+            const scopedWhere = acc.ownFilter ? sutramExcel.engine.auth.applyOwnershipWhere(filterObj, acc.ownFilter) : filterObj;
 
             // Pure delegation through sutramEngine -> sutramCore
             const result = await sutramExcel.engine.search(tblName, search, {
-                where: filterObj,
+                where: scopedWhere,
                 limit,
                 offset,
                 full,
                 orderBy
             });
 
-            ok(res, result.rows, { total: result.total, count: result.rows.length, offset, limit });
+            const safeRows = sutramExcel.engine.auth
+                ? sutramExcel.engine.auth.maskRows(tblName, result.rows, req.unmaskedCols || new Set())
+                : result.rows;
+
+            ok(res, safeRows, { total: result.total, count: safeRows.length, offset, limit });
         } catch (e) {
             fail(res, e, 500);
         }
@@ -396,6 +434,9 @@ function buildExcelRouter(sutramExcel) {
         try {
             const tblName = req.params.table;
             const colName = req.params.column;
+            const acc = checkTableAccess(req, res, tblName, 'view');
+            if (!acc.allowed) return;
+
             const tbl = sutramExcel.engine.table(tblName);
             if (!tbl) {
                 return fail(res, `Table "${tblName}" not found`, 404);
@@ -431,7 +472,8 @@ function buildExcelRouter(sutramExcel) {
                 return fail(res, 'Filtering on password or protected columns is not permitted for security reasons.', 403);
             }
 
-            const result = await Promise.resolve(sutramExcel.engine.distinct(tblName, validCol));
+            const scopedWhere = acc.ownFilter ? sutramExcel.engine.auth.applyOwnershipWhere({}, acc.ownFilter) : {};
+            const result = await Promise.resolve(sutramExcel.engine.distinct(tblName, validCol, { where: scopedWhere }));
             ok(res, result);
         } catch (e) {
             fail(res, e, 500);
@@ -443,6 +485,8 @@ function buildExcelRouter(sutramExcel) {
     // Body: { rows: [...] }
     // Returns: { rows, correctionList }
     router.post('/verify/:table', async (req, res) => {
+        const acc = checkTableAccess(req, res, req.params.table, 'edit');
+        if (!acc.allowed) return;
         const cfg = getConfig(req.params.table, res);
         if (!cfg) return;
         try {
@@ -457,6 +501,8 @@ function buildExcelRouter(sutramExcel) {
     // Body: { row: {...} }
     // Returns: { status, data, newData? }
     router.post('/import/:table', async (req, res) => {
+        const acc = checkTableAccess(req, res, req.params.table, 'edit');
+        if (!acc.allowed) return;
         const cfg = getConfig(req.params.table, res);
         if (!cfg) return;
         try {
@@ -466,12 +512,17 @@ function buildExcelRouter(sutramExcel) {
             if (result.status === 'rejected') {
                 return fail(res, result.error || 'Import rejected', 400, { result });
             }
+            if (result.newData && sutramExcel.engine?.auth) {
+                result.newData = sutramExcel.engine.auth.maskRow(req.params.table, result.newData, req.unmaskedCols || new Set());
+            }
             ok(res, result);
         } catch (e) { fail(res, e); }
     });
 
     // ── POST /update/:table ───────────────────────────────────
     router.post('/update/:table', async (req, res) => {
+        const acc = checkTableAccess(req, res, req.params.table, 'edit');
+        if (!acc.allowed) return;
         const cfg = getConfig(req.params.table, res);
         if (!cfg) return;
         try {
@@ -479,7 +530,10 @@ function buildExcelRouter(sutramExcel) {
             const { row = {} } = req.body;
             const result = await importer.updateRow(row, cfg, req);
             if (result.status === 'rejected') {
-                return fail(res, result.error || 'Update rejected', 400, { result });
+                return fail(res, result.error || 'Update rejected', result.statusCode || 400, { result });
+            }
+            if (result.newData && sutramExcel.engine?.auth) {
+                result.newData = sutramExcel.engine.auth.maskRow(req.params.table, result.newData, req.unmaskedCols || new Set());
             }
             ok(res, result);
         } catch (e) { fail(res, e); }
@@ -489,6 +543,8 @@ function buildExcelRouter(sutramExcel) {
     // Body: { id: 123 } or { ids: [123, 124] } or { row: { _id: 123 } }
     router.post('/delete/:table', async (req, res) => {
         const tblName = req.params.table;
+        const acc = checkTableAccess(req, res, tblName, 'delete');
+        if (!acc.allowed) return;
         try {
             const { id, ids, row } = req.body;
             let targetIds = [];
@@ -512,6 +568,12 @@ function buildExcelRouter(sutramExcel) {
             let deletedCount = 0;
             if (sutramExcel.engine) {
                 for (const targetId of targetIds) {
+                    if (acc.ownFilter) {
+                        const existingRow = await sutramExcel.engine.getById(tblName, targetId);
+                        if (!existingRow || Number(existingRow[acc.ownFilter.column]) !== acc.ownFilter.value) {
+                            return fail(res, 'Access Denied: You can only delete your own records.', 403);
+                        }
+                    }
                     const c = await sutramExcel.engine.deleteById(tblName, targetId);
                     deletedCount += (c || 0);
                 }

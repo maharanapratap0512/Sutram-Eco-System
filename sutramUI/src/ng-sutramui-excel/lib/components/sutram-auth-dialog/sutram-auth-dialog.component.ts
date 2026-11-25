@@ -25,7 +25,7 @@ export class SutramAuthDialogComponent {
   @Input() canDismiss: boolean = true;
 
   @Output() visibleChange = new EventEmitter<boolean>();
-  @Output() authenticated = new EventEmitter<{ user: any; rights: any[] }>();
+  @Output() authenticated = new EventEmitter<{ user: any; rights: any[]; token?: string }>();
 
   public username: string = '';
   public password: string = '';
@@ -47,8 +47,8 @@ export class SutramAuthDialogComponent {
 
   public onSubmit(): void {
     this.errorMessage = '';
-    if (!this.username.trim() || !this.password.trim()) {
-      this.errorMessage = 'यूज़रनेम और पासवर्ड दोनों आवश्यक हैं (Username & password required)';
+    if (!this.username.trim()) {
+      this.errorMessage = 'यूज़रनेम आवश्यक है (Username is required)';
       this.cdr.markForCheck();
       return;
     }
@@ -58,18 +58,18 @@ export class SutramAuthDialogComponent {
 
     const loginUrl = '/api/_sutram/auth/login';
 
-    this.http.post<{ success: boolean; result?: { user: any; rights: any[] }; error?: string }>(loginUrl, {
+    this.http.post<{ success: boolean; result?: { user: any; rights: any[]; token?: string }; error?: string }>(loginUrl, {
       username: this.username.trim(),
-      password: this.password.trim()
+      password: (this.password ?? '').trim()
     }).subscribe({
       next: (res) => {
         this.isLoading = false;
         if (res && res.success && res.result) {
-          const { user, rights } = res.result;
+          const { user, rights, token } = res.result;
           this.password = '';
           this.visible = false;
           this.visibleChange.emit(false);
-          this.authenticated.emit({ user, rights: rights || [] });
+          this.authenticated.emit({ user, rights: rights || [], token: token || user?.token || '' });
         } else {
           this.errorMessage = res?.error || 'लॉगिन असफल (Authentication failed)';
         }

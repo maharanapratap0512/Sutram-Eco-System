@@ -1,5 +1,6 @@
 <!-- sutram-excel-studio.component.html -->
 <div class="sutram-excel-container" [class.dark-mode]="isDarkMode">
+  <ng-container *ngIf="!enableAuth || isProjectAuthenticated; else projectLockScreen">
 
   <!-- 1. TOP EXCEL-STYLE RIBBON HEADER (Few cm area) -->
   <header class="studio-header">
@@ -1449,9 +1450,78 @@
     [(visible)]="showAuthDialog"
     [isDarkMode]="isDarkMode"
     [apiBase]="apiBase"
+    [projectSlug]="getResolvedProjectSlug()"
     [canDismiss]="authDialogCanDismiss"
     (authenticated)="onAuthenticated($event)">
   </sutram-auth-dialog>
+
+  </ng-container>
+
+  <!-- Opaque Full-Canvas Project Lock Gate (Shown until project user authenticates) -->
+  <ng-template #projectLockScreen>
+    <div class="project-lock-gate">
+      <div class="project-lock-card">
+        <div class="lock-icon-badge">
+          <i class="pi pi-lock"></i>
+        </div>
+        <h2 class="lock-title">Project Access Required</h2>
+        <p class="lock-subtitle">
+          Sign in with your project credentials to access
+          <strong class="font-mono" *ngIf="getResolvedProjectSlug()">{{ getResolvedProjectSlug() }}</strong>
+          <span *ngIf="!getResolvedProjectSlug()">this project workspace</span>
+        </p>
+
+        <div class="lock-error-box" *ngIf="lockErrorMessage">
+          <i class="pi pi-exclamation-triangle"></i>
+          <span>{{ lockErrorMessage }}</span>
+        </div>
+
+        <form (ngSubmit)="onLockGateLogin()" class="lock-form">
+          <div class="lock-field">
+            <label for="lockUsername">Username</label>
+            <span class="p-input-icon-left w-full">
+              <i class="pi pi-user"></i>
+              <input
+                id="lockUsername"
+                type="text"
+                pInputText
+                class="p-inputtext-sm w-full font-mono"
+                [(ngModel)]="lockUsername"
+                name="lockUsername"
+                placeholder="e.g. admin or author"
+                autocomplete="username"
+                [disabled]="isLockAuthenticating"
+                autofocus />
+            </span>
+          </div>
+
+          <div class="lock-field">
+            <label for="lockPassword">Password</label>
+            <p-password
+              id="lockPassword"
+              [(ngModel)]="lockPassword"
+              name="lockPassword"
+              [toggleMask]="true"
+              [feedback]="false"
+              placeholder="Password (leave blank if empty)"
+              styleClass="w-full lock-password-wrap"
+              inputStyleClass="w-full p-inputtext-sm font-mono"
+              [disabled]="isLockAuthenticating">
+            </p-password>
+          </div>
+
+          <button
+            pButton
+            type="submit"
+            class="p-button-primary w-full lock-submit-btn"
+            icon="pi pi-sign-in"
+            [loading]="isLockAuthenticating"
+            [label]="isLockAuthenticating ? 'Verifying...' : 'Unlock Project'">
+          </button>
+        </form>
+      </div>
+    </div>
+  </ng-template>
 
 </div>
 

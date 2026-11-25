@@ -114,10 +114,45 @@ function buildRouter(engine) {
     // ── _SUTRAM ROUTES — engine config ────────────────────────
     // ═════════════════════════════════════════════════════════
 
+    // Auth / RBAC helper (enforced cleanly whenever req.projectUser is attached by server middleware)
+    function checkAccess(req, tableName, action = 'view') {
+        const user = req.projectUser;
+        if (!user || !engine.auth) return { allowed: true, ownFilter: null };
+        const rights = req.projectRights || [];
+        const eff = engine.auth.getEffectiveRights(user, tableName, rights);
+        const permMap = { view: eff.can_view, edit: eff.can_edit, delete: eff.can_delete };
+        if (!permMap[action]) {
+            return { allowed: false, eff };
+        }
+        const ownFilter = engine.auth.getOwnershipFilter(user, tableName, rights);
+        return { allowed: true, eff, ownFilter };
+    }
+
+    function stripProtectedPlaceholders(tableName, body = {}, user = null) {
+        if (!body || typeof body !== 'object') return body;
+        const copy = { ...body };
+        const cols = engine?._schema?.[tableName]?.columns || {};
+        for (const [colName, colDef] of Object.entries(cols)) {
+            const AuthManager = require('./AuthManager');
+            if (AuthManager.isSensitiveColumn(colName, colDef) && copy[colName] === '••••••••') {
+                delete copy[colName];
+            }
+        }
+        if (user && user.role !== 'admin') {
+            delete copy.user_id;
+        }
+        return copy;
+    }
+
     // GET /_sutram/menu — sidebar menu + reports list
     router.get('/_sutram/menu', async (req, res) => {
         try {
             const menu = await engine.ui.getMenu();
+            if (req.projectUser && engine.auth && Array.isArray(menu?.tables)) {
+                menu.tables = menu.tables.filter(t =>
+                    engine.auth.getEffectiveRights(req.projectUser, t.table_name, req.projectRights || []).can_view
+                );
+            }
             ok(res, menu);
         } catch (e) {
             fail(res, e, 500);
@@ -127,6 +162,8 @@ function buildRouter(engine) {
     // GET /_sutram/schema/:table — full column config for frontend
     router.get('/_sutram/schema/:table', async (req, res) => {
         try {
+            const acc = checkAccess(req, req.params.table, 'view');
+            if (!acc.allowed) return fail(res, `Access Denied to "${req.params.table}"`, 403);
             const schema = await engine.ui.getTableSchema(req.params.table);
             ok(res, schema);
         } catch (e) {
@@ -155,15 +192,22 @@ function buildRouter(engine) {
         if (!tbl) return;
 
         try {
+            const acc = checkAccess(req, req.params.table, 'view');
+            if (!acc.allowed) return fail(res, `Access Denied: cannot view "${req.params.table}"`, 403);
+
             const { where, limit, offset, orderBy, full } = parseQuery(req.query, tbl);
+            const scopedWhere = acc.ownFilter ? engine.auth.applyOwnershipWhere(where, acc.ownFilter) : where;
             const opts = { full };
             if (orderBy) opts.orderBy = orderBy;
             if (limit) opts.limit = limit;
             if (offset) opts.offset = offset;
 
-            const result = await tbl.getAll(where, opts);
-            const total = Object.keys(where).length
-                ? await tbl.count(where)
+            const rawResult = await tbl.getAll(scopedWhere, opts);
+            const result = engine.auth
+                ? engine.auth.maskRows(req.params.table, rawResult, req.unmaskedCols || new Set())
+                : rawResult;
+            const total = (typeof scopedWhere === 'object' && Object.keys(scopedWhere).length)
+                ? await tbl.count(scopedWhere)
                 : await tbl.count();
 
             ok(res, result, { total, count: result.length });
@@ -178,9 +222,18 @@ function buildRouter(engine) {
         if (!tbl) return;
 
         try {
+            const acc = checkAccess(req, req.params.table, 'view');
+            if (!acc.allowed) return fail(res, `Access Denied: cannot view "${req.params.table}"`, 403);
+
             const row = await tbl.getById(Number(req.params.id));
             if (!row) return fail(res, `Record ${req.params.id} not found`, 404);
-            ok(res, row);
+            if (acc.ownFilter && Number(row[acc.ownFilter.column]) !== acc.ownFilter.value) {
+                return fail(res, `Access Denied: you can only access your own records`, 403);
+            }
+            const safeRow = engine.auth
+                ? engine.auth.maskRow(req.params.table, row, req.unmaskedCols || new Set())
+                : row;
+            ok(res, safeRow);
         } catch (e) {
             fail(res, e);
         }
@@ -190,8 +243,16 @@ function buildRouter(engine) {
     router.post('/:table', async (req, res, next) => {
         if (RESERVED.includes(req.params.table)) return next();
         try {
-            const row = await engine.insert(req.params.table, req.body);
-            ok(res, row);
+            const acc = checkAccess(req, req.params.table, 'edit');
+            if (!acc.allowed) return fail(res, `Access Denied: cannot insert into "${req.params.table}"`, 403);
+
+            let payload = stripProtectedPlaceholders(req.params.table, req.body, req.projectUser);
+            if (req.projectUser && engine.auth) {
+                payload = engine.auth.injectOwnerForWrite(req.params.table, payload, req.projectUser);
+            }
+            const row = await engine.insert(req.params.table, payload);
+            const safeRow = engine.auth ? engine.auth.maskRow(req.params.table, row, req.unmaskedCols || new Set()) : row;
+            ok(res, safeRow);
         } catch (e) {
             fail(res, e);
         }
@@ -203,15 +264,22 @@ function buildRouter(engine) {
         if (!tbl) return;
 
         try {
+            const acc = checkAccess(req, req.params.table, 'view');
+            if (!acc.allowed) return fail(res, `Access Denied: cannot query "${req.params.table}"`, 403);
+
             const { where = {}, limit = null, page = 1, orderBy = null, full = true } = req.body ?? {};
+            const scopedWhere = acc.ownFilter ? engine.auth.applyOwnershipWhere(where, acc.ownFilter) : where;
             const offset = limit ? (page - 1) * limit : null;
             const opts = { full };
             if (orderBy) opts.orderBy = orderBy;
             if (limit) opts.limit = limit;
             if (offset) opts.offset = offset;
 
-            const result = await tbl.getAll(where, opts);
-            const total = await tbl.count(where);
+            const rawResult = await tbl.getAll(scopedWhere, opts);
+            const result = engine.auth
+                ? engine.auth.maskRows(req.params.table, rawResult, req.unmaskedCols || new Set())
+                : rawResult;
+            const total = await tbl.count(scopedWhere);
             ok(res, result, { total, count: result.length });
         } catch (e) {
             fail(res, e);
@@ -221,8 +289,22 @@ function buildRouter(engine) {
     // PUT /:table/:id — updateById (trigger-aware)
     router.put('/:table/:id', async (req, res) => {
         try {
-            const row = await engine.updateById(req.params.table, req.body, Number(req.params.id));
-            ok(res, row);
+            const acc = checkAccess(req, req.params.table, 'edit');
+            if (!acc.allowed) return fail(res, `Access Denied: cannot edit "${req.params.table}"`, 403);
+
+            const targetId = Number(req.params.id);
+            if (acc.ownFilter) {
+                const existing = await engine.getById(req.params.table, targetId);
+                if (!existing) return fail(res, `Record ${targetId} not found`, 404);
+                if (Number(existing[acc.ownFilter.column]) !== acc.ownFilter.value) {
+                    return fail(res, `Access Denied: you can only modify your own records`, 403);
+                }
+            }
+
+            const payload = stripProtectedPlaceholders(req.params.table, req.body, req.projectUser);
+            const row = await engine.updateById(req.params.table, payload, targetId);
+            const safeRow = engine.auth ? engine.auth.maskRow(req.params.table, row, req.unmaskedCols || new Set()) : row;
+            ok(res, safeRow);
         } catch (e) {
             fail(res, e);
         }
@@ -231,7 +313,19 @@ function buildRouter(engine) {
     // DELETE /:table/:id — deleteById (trigger-aware)
     router.delete('/:table/:id', async (req, res) => {
         try {
-            const changes = await engine.deleteById(req.params.table, Number(req.params.id));
+            const acc = checkAccess(req, req.params.table, 'delete');
+            if (!acc.allowed) return fail(res, `Access Denied: cannot delete from "${req.params.table}"`, 403);
+
+            const targetId = Number(req.params.id);
+            if (acc.ownFilter) {
+                const existing = await engine.getById(req.params.table, targetId);
+                if (!existing) return fail(res, `Record ${targetId} not found`, 404);
+                if (Number(existing[acc.ownFilter.column]) !== acc.ownFilter.value) {
+                    return fail(res, `Access Denied: you can only delete your own records`, 403);
+                }
+            }
+
+            const changes = await engine.deleteById(req.params.table, targetId);
             ok(res, { deleted: changes });
         } catch (e) {
             fail(res, e);

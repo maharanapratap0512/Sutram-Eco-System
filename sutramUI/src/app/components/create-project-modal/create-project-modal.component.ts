@@ -343,7 +343,7 @@ export class CreateProjectModalComponent implements OnChanges {
       return;
     }
 
-    const adminPass = this.adminPassword?.trim() || 'admin';
+    const adminPass = (this.adminPassword ?? '').trim();
     this.isCreating = true;
     this.showConsole = true;
     this.createdProject = null;

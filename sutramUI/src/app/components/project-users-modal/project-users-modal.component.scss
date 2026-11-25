@@ -431,6 +431,53 @@
     text-align: center;
     width: 80px;
   }
+
+  .th-scope, .td-scope {
+    text-align: center;
+    width: 118px;
+  }
+}
+
+.scope-toggle-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.22rem 0.55rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  border-radius: 999px;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  background: rgba(99, 102, 241, 0.08);
+  color: #4f46e5;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+
+  i {
+    font-size: 0.68rem;
+  }
+
+  &:hover:not(:disabled) {
+    background: rgba(99, 102, 241, 0.16);
+    border-color: #6366f1;
+  }
+
+  &.scope-own {
+    background: rgba(245, 158, 11, 0.12);
+    border-color: rgba(245, 158, 11, 0.45);
+    color: #d97706;
+
+    &:hover:not(:disabled) {
+      background: rgba(245, 158, 11, 0.22);
+      border-color: #f59e0b;
+    }
+  }
+
+  &:disabled {
+    opacity: 0.65;
+    cursor: default;
+  }
 }
 
 .no-selection-placeholder {
@@ -654,6 +701,18 @@
       }
       tbody tr:hover {
         background: rgba(99, 102, 241, 0.12) !important;
+      }
+    }
+
+    .scope-toggle-pill {
+      background: rgba(99, 102, 241, 0.18) !important;
+      border-color: rgba(129, 140, 248, 0.4) !important;
+      color: #a5b4fc !important;
+
+      &.scope-own {
+        background: rgba(245, 158, 11, 0.18) !important;
+        border-color: rgba(251, 191, 36, 0.45) !important;
+        color: #fbbf24 !important;
       }
     }
 

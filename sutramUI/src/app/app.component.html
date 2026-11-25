@@ -44,9 +44,12 @@
           #studio
           *ngIf="isStudioMounted"
           [table]="selectedTable"
+          [projectSlug]="projectContext.activeProject?.project_slug || ''"
           [isDark]="isDarkMode"
           [apiBase]="'/_sutram/excel'"
           [enableAuth]="true"
+          (sessionAuthenticated)="onProjectSessionAuthenticated($event)"
+          (sessionLocked)="onProjectSessionLocked($event)"
           (openProjectUsersModal)="onOpenProjectUsersModal()"
           (tableCreated)="onTableCreatedFromStudio($event)">
         </sutram-excel-studio>

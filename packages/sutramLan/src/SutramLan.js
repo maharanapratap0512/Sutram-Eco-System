@@ -78,14 +78,19 @@ class SutramLan extends EventEmitter {
    */
   shareProject(project) {
     if (!project || !project.id) throw new Error('Project must have an id');
-    const authType = project.authType || (project.pin ? 'pin' : (project.password ? 'password' : 'none'));
+    const rawPin = project.pin !== undefined && project.pin !== null ? String(project.pin).trim() : '';
+    const rawPassword = project.password !== undefined && project.password !== null ? String(project.password).trim() : '';
 
-    // Store credentials securely if PIN/password is specified
-    if (authType === 'pin' && project.pin) {
-      const { hash, salt } = LanSecurity.hashSecret(project.pin);
+    let authType = project.authType || (rawPin ? 'pin' : (rawPassword ? 'password' : 'none'));
+    if (authType === 'pin' && !rawPin) authType = 'none';
+    if (authType === 'password' && !rawPassword) authType = 'none';
+
+    // Store credentials securely if non-blank PIN/password is specified; blank automatically becomes open ('none')
+    if (authType === 'pin') {
+      const { hash, salt } = LanSecurity.hashSecret(rawPin);
       this.projectCredentials.set(project.id, { authType: 'pin', hash, salt });
-    } else if (authType === 'password' && project.password) {
-      const { hash, salt } = LanSecurity.hashSecret(project.password);
+    } else if (authType === 'password') {
+      const { hash, salt } = LanSecurity.hashSecret(rawPassword);
       this.projectCredentials.set(project.id, { authType: 'password', hash, salt });
     } else {
       this.projectCredentials.delete(project.id);

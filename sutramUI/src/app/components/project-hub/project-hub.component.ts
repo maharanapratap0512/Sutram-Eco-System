@@ -280,14 +280,12 @@ export class ProjectHubComponent implements OnInit, OnDestroy {
   public confirmQuickShare(): void {
     if (!this.sharingProject) return;
 
-    if (this.quickAuthType === 'pin' && (!this.quickPin || this.quickPin.trim().length < 4)) {
-      this.shareError = 'Please enter at least a 4-digit PIN';
-      return;
-    }
-    if (this.quickAuthType === 'password' && (!this.quickPassword || this.quickPassword.trim().length < 4)) {
-      this.shareError = 'Please enter at least a 4-character password';
-      return;
-    }
+    const cleanPin = (this.quickPin ?? '').trim();
+    const cleanPass = (this.quickPassword ?? '').trim();
+    const effectiveAuthType: 'none' | 'pin' | 'password' =
+      this.quickAuthType === 'pin'
+        ? (cleanPin ? 'pin' : 'none')
+        : (this.quickAuthType === 'password' ? (cleanPass ? 'password' : 'none') : 'none');
 
     this.isSharingSubmitting = true;
     this.shareError = '';
@@ -295,9 +293,9 @@ export class ProjectHubComponent implements OnInit, OnDestroy {
     this.lanService.shareProject({
       projectId: this.sharingProject.project_slug,
       name: this.sharingProject.project_name,
-      authType: this.quickAuthType,
-      pin: this.quickAuthType === 'pin' ? this.quickPin.trim() : undefined,
-      password: this.quickAuthType === 'password' ? this.quickPassword.trim() : undefined,
+      authType: effectiveAuthType,
+      pin: effectiveAuthType === 'pin' ? cleanPin : undefined,
+      password: effectiveAuthType === 'password' ? cleanPass : undefined,
       description: this.sharingProject.description || ''
     }).subscribe({
       next: (res) => {

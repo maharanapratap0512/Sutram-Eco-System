@@ -526,6 +526,53 @@ module.exports = [
     // ── version 9 — can_ocr capability flag on sys_user ─────────
     [
         `ALTER TABLE sys_user ADD COLUMN can_ocr INTEGER DEFAULT 1`
+    ],
+
+    // ── version 10 — extensible misc_settings JSON column & sys_ auth metadata ─
+    [
+        `ALTER TABLE sys_user ADD COLUMN misc_settings TEXT`,
+        `ALTER TABLE sys_user_rights ADD COLUMN misc_settings TEXT`,
+        `ALTER TABLE sys_table ADD COLUMN misc_settings TEXT`,
+
+        `INSERT OR IGNORE INTO sys_column (table_id, column_name, label, col_type, is_required, is_pk, default_value, sort_order, active)
+         SELECT t._id, 'can_ocr', 'Can OCR', 'boolean', 0, 0, '1', 8, 1
+         FROM sys_table t WHERE t.table_name = 'sys_user'`,
+
+        `INSERT OR IGNORE INTO sys_column (table_id, column_name, label, col_type, is_required, is_pk, default_value, sort_order, active)
+         SELECT t._id, 'misc_settings', 'Misc Settings', 'json', 0, 0, NULL, 9, 1
+         FROM sys_table t WHERE t.table_name = 'sys_user'`,
+
+        `INSERT OR IGNORE INTO sys_table (table_name, label, description, is_system, active)
+         VALUES ('sys_user_rights', 'User Table Rights', 'Per-table CRUD & row ownership rights', 1, 1)`,
+
+        `INSERT OR IGNORE INTO sys_column (table_id, column_name, label, col_type, is_required, is_pk, default_value, sort_order, active)
+         SELECT t._id, '_id', 'ID', 'number', 0, 1, NULL, 0, 1 FROM sys_table t WHERE t.table_name = 'sys_user_rights'`,
+        `INSERT OR IGNORE INTO sys_column (table_id, column_name, label, col_type, is_required, is_pk, default_value, sort_order, active)
+         SELECT t._id, 'user_id', 'User ID', 'number', 1, 0, NULL, 1, 1 FROM sys_table t WHERE t.table_name = 'sys_user_rights'`,
+        `INSERT OR IGNORE INTO sys_column (table_id, column_name, label, col_type, is_required, is_pk, default_value, sort_order, active)
+         SELECT t._id, 'table_name', 'Table Name', 'string', 1, 0, NULL, 2, 1 FROM sys_table t WHERE t.table_name = 'sys_user_rights'`,
+        `INSERT OR IGNORE INTO sys_column (table_id, column_name, label, col_type, is_required, is_pk, default_value, sort_order, active)
+         SELECT t._id, 'can_view', 'Can View', 'boolean', 0, 0, '1', 3, 1 FROM sys_table t WHERE t.table_name = 'sys_user_rights'`,
+        `INSERT OR IGNORE INTO sys_column (table_id, column_name, label, col_type, is_required, is_pk, default_value, sort_order, active)
+         SELECT t._id, 'can_edit', 'Can Edit', 'boolean', 0, 0, '1', 4, 1 FROM sys_table t WHERE t.table_name = 'sys_user_rights'`,
+        `INSERT OR IGNORE INTO sys_column (table_id, column_name, label, col_type, is_required, is_pk, default_value, sort_order, active)
+         SELECT t._id, 'can_delete', 'Can Delete', 'boolean', 0, 0, '1', 5, 1 FROM sys_table t WHERE t.table_name = 'sys_user_rights'`,
+        `INSERT OR IGNORE INTO sys_column (table_id, column_name, label, col_type, is_required, is_pk, default_value, sort_order, active)
+         SELECT t._id, 'can_unmask', 'Can Unmask', 'boolean', 0, 0, '0', 6, 1 FROM sys_table t WHERE t.table_name = 'sys_user_rights'`,
+        `INSERT OR IGNORE INTO sys_column (table_id, column_name, label, col_type, is_required, is_pk, default_value, sort_order, active)
+         SELECT t._id, 'misc_settings', 'Misc Settings', 'json', 0, 0, NULL, 7, 1 FROM sys_table t WHERE t.table_name = 'sys_user_rights'`,
+
+        `INSERT OR IGNORE INTO sys_table (table_name, label, description, is_system, active)
+         VALUES ('sys_column_security', 'Column Security', 'Hashed column unmask PINs', 1, 1)`,
+
+        `INSERT OR IGNORE INTO sys_column (table_id, column_name, label, col_type, is_required, is_pk, default_value, sort_order, active)
+         SELECT t._id, '_id', 'ID', 'number', 0, 1, NULL, 0, 1 FROM sys_table t WHERE t.table_name = 'sys_column_security'`,
+        `INSERT OR IGNORE INTO sys_column (table_id, column_name, label, col_type, is_required, is_pk, default_value, sort_order, active)
+         SELECT t._id, 'table_name', 'Table Name', 'string', 1, 0, NULL, 1, 1 FROM sys_table t WHERE t.table_name = 'sys_column_security'`,
+        `INSERT OR IGNORE INTO sys_column (table_id, column_name, label, col_type, is_required, is_pk, default_value, sort_order, active)
+         SELECT t._id, 'column_name', 'Column Name', 'string', 1, 0, NULL, 2, 1 FROM sys_table t WHERE t.table_name = 'sys_column_security'`,
+        `INSERT OR IGNORE INTO sys_column (table_id, column_name, label, col_type, is_required, is_pk, default_value, sort_order, active)
+         SELECT t._id, 'secret_hash', 'Secret Hash', 'string', 1, 0, NULL, 3, 1 FROM sys_table t WHERE t.table_name = 'sys_column_security'`
     ]
 
 ];

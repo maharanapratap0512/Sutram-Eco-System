@@ -159,15 +159,15 @@ export class MasterUsersModalComponent implements OnInit {
 
   public submitNewUser(): void {
     this.formError = '';
-    if (!this.newUsername.trim() || !this.newPassword.trim()) {
-      this.formError = 'Username and password are required';
+    if (!this.newUsername.trim()) {
+      this.formError = 'Username is required';
       return;
     }
 
     this.projectContext.createMasterUser({
       username: this.newUsername.trim(),
       display_name: this.newDisplayName.trim() || this.newUsername.trim(),
-      password: this.newPassword.trim(),
+      password: (this.newPassword ?? '').trim(),
       role: this.newRole,
       can_create_project: (this.newRole === 'superadmin' || this.newCanCreateProject) ? 1 : 0
     }).subscribe({

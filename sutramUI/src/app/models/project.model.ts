@@ -27,6 +27,8 @@ export interface ProjectItem {
   db_type?: 'sqlite' | 'mysql';
   db_config?: string | any;
   mysql_database?: string;
+  is_blank_password?: number | boolean;
+  misc_settings?: any;
 }
 
 export interface MasterUser {
@@ -36,6 +38,8 @@ export interface MasterUser {
   role: 'superadmin' | 'admin' | 'user';
   can_create_project?: number;
   token?: string;
+  is_blank_password?: number | boolean;
+  misc_settings?: any;
   active: number;
   created_at: string;
 }
@@ -57,8 +61,29 @@ export interface InProjectUser {
   display_name?: string;
   role: 'admin' | 'author';
   active: number;
+  can_ocr?: number | boolean;
+  is_blank_password?: number | boolean;
+  misc_settings?: any;
+  token?: string;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface ProjectTableRight {
+  table_name: string;
+  can_view: number | boolean;
+  can_edit: number | boolean;
+  can_delete: number | boolean;
+  can_unmask: number | boolean;
+  data_scope?: 'all' | 'own';
+  misc_settings?: any;
+}
+
+export interface ProjectSessionState {
+  projectSlug: string;
+  user: InProjectUser;
+  rights: ProjectTableRight[];
+  token: string;
 }
 
 export interface ProjectCreatePayload {

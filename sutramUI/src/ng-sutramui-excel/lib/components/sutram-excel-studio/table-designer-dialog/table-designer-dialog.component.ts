@@ -278,7 +278,7 @@ export class TableDesignerDialogComponent implements OnInit, OnChanges {
           this.newTableDesc = d.description || '';
           this.existingRowCount = d.rowCount || 0;
 
-          const cols = (d.columns || []).filter((c: any) => c.column_name !== 'hl' && c.column_name !== 'created_at' && c.column_name !== 'updated_at');
+          const cols = (d.columns || []).filter((c: any) => c.column_name !== 'hl' && c.column_name !== 'user_id' && c.column_name !== 'created_at' && c.column_name !== 'updated_at');
           this.originalColumnNames = cols.filter((c: any) => !c.is_pk && c.column_name !== '_id').map((c: any) => c.column_name);
           this.designerColumns = cols.map((c: any) => this.mapBackendColumnToDesignerRow(c));
 

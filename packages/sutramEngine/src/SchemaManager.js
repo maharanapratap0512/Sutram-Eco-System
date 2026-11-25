@@ -488,6 +488,19 @@ class SchemaManager {
                 sort_order: 0
             });
         }
+        if (!incoming.some(c => c.column_name === 'user_id') && existingMap.has('user_id')) {
+            const origUid = existingMap.get('user_id');
+            incoming.push({
+                column_name: 'user_id',
+                original_name: 'user_id',
+                label: origUid?.label || 'Owner User ID',
+                col_type: 'number',
+                sql_type: 'INTEGER',
+                is_pk: 0,
+                is_required: 0,
+                sort_order: incoming.length
+            });
+        }
         if (!incoming.some(c => c.column_name === 'hl')) {
             const origHl = existingMap.get('hl');
             incoming.push({
@@ -569,6 +582,7 @@ class SchemaManager {
         const removedCols = existingCols.filter(c =>
             c.column_name !== '_id' &&
             c.column_name !== 'hl' &&
+            c.column_name !== 'user_id' &&
             !keptOriginalNames.has(c.column_name)
         );
 
@@ -944,7 +958,18 @@ class SchemaManager {
             ...customCols
         ];
 
-        // Automatic compulsory Highlight flag (hl) for every table
+        // Automatic compulsory Owner User ID (user_id) and Highlight flag (hl) for every user table
+        if (!customCols.some(c => c.column_name === 'user_id')) {
+            allColumns.push({
+                column_name: 'user_id',
+                label: 'Owner User ID',
+                col_type: 'number',
+                sql_type: 'INTEGER',
+                is_pk: 0,
+                is_required: 0,
+                sort_order: allColumns.length
+            });
+        }
         allColumns.push({
             column_name: 'hl',
             label: 'Highlight Flag',

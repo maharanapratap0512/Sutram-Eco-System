@@ -10,6 +10,7 @@ export interface UserTableRight {
   can_edit: boolean;
   can_delete: boolean;
   can_unmask: boolean;
+  data_scope: 'all' | 'own';
 }
 
 @Component({
@@ -43,6 +44,7 @@ export class ProjectUsersModalComponent implements OnInit, OnChanges {
   public formUsername: string = '';
   public formDisplayName: string = '';
   public formPassword: string = '';
+  public formPasswordDirty: boolean = false;
   public formRole: 'admin' | 'author' = 'author';
   public formCanOcr: boolean = true;
   public formError: string = '';
@@ -152,12 +154,14 @@ export class ProjectUsersModalComponent implements OnInit, OnChanges {
         const savedRights = (res && res.success && Array.isArray(res.result)) ? res.result : [];
         this.userRights = this.availableTables.map(tbl => {
           const match = savedRights.find(r => r.table_name === tbl);
+          const rawScope = match?.data_scope === 'own' || match?.misc_settings?.data_scope === 'own' ? 'own' : 'all';
           return {
             table_name: tbl,
             can_view: match ? match.can_view === 1 : true,
             can_edit: match ? match.can_edit === 1 : true,
             can_delete: match ? match.can_delete === 1 : true,
-            can_unmask: match ? match.can_unmask === 1 : false
+            can_unmask: match ? match.can_unmask === 1 : false,
+            data_scope: rawScope
           };
         });
         this.cdr.markForCheck();
@@ -200,6 +204,7 @@ export class ProjectUsersModalComponent implements OnInit, OnChanges {
     this.formDisplayName = u.display_name || u.username;
     this.formRole = u.role;
     this.formPassword = '';
+    this.formPasswordDirty = false;
     this.formCanOcr = (u as any).can_ocr !== 0 && (u as any).can_ocr !== false;
     this.formError = '';
     this.loadUserRights(u._id);
@@ -213,6 +218,7 @@ export class ProjectUsersModalComponent implements OnInit, OnChanges {
     this.formUsername = '';
     this.formDisplayName = '';
     this.formPassword = '';
+    this.formPasswordDirty = false;
     this.formRole = 'author';
     this.formCanOcr = true;
     this.formError = '';
@@ -226,21 +232,34 @@ export class ProjectUsersModalComponent implements OnInit, OnChanges {
     this.cdr.markForCheck();
   }
 
+  // ── Bulk / Toggle Per-Table Data Scope ('all' | 'own') ──
+  public toggleAllDataScope(scope: 'all' | 'own'): void {
+    for (const r of this.userRights) {
+      r.data_scope = scope;
+    }
+    this.cdr.markForCheck();
+  }
+
+  public toggleRowDataScope(r: UserTableRight): void {
+    r.data_scope = r.data_scope === 'own' ? 'all' : 'own';
+    this.cdr.markForCheck();
+  }
+
   // ── Submit User Details (Create or Update) ──
   public submitUserForm(): void {
     this.formError = '';
     const query = this.getProjectQuery();
 
     if (this.rightViewMode === 'add_user') {
-      if (!this.formUsername.trim() || !this.formPassword.trim()) {
-        this.formError = 'Username and password are required';
+      if (!this.formUsername.trim()) {
+        this.formError = 'Username is required';
         return;
       }
       this.isSavingUser = true;
       this.http.post<{ success: boolean; result: InProjectUser; error?: string }>(`/api/_sutram/schema/users${query}`, {
         username: this.formUsername.trim(),
         display_name: this.formDisplayName.trim() || this.formUsername.trim(),
-        password: this.formPassword.trim(),
+        password: (this.formPassword ?? '').trim(),
         role: this.formRole,
         can_ocr: this.formCanOcr ? 1 : 0
       }).subscribe({
@@ -268,8 +287,8 @@ export class ProjectUsersModalComponent implements OnInit, OnChanges {
         role: this.formRole,
         can_ocr: this.formCanOcr ? 1 : 0
       };
-      if (this.formPassword.trim()) {
-        userPayload.password = this.formPassword.trim();
+      if (this.formPasswordDirty || this.formPassword.trim()) {
+        userPayload.password = (this.formPassword ?? '').trim();
       }
 
       this.http.put<{ success: boolean; result: InProjectUser; error?: string }>(`/api/_sutram/schema/users/${this.formUserId}${query}`, userPayload).subscribe({
