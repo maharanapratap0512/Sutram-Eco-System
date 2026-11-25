@@ -118,7 +118,7 @@ class RefMatcher {
         }
 
         // 2. dictionary fallback
-        const dictEntry = this.dictionary.find(header.ref_table, clean);
+        const dictEntry = await this.dictionary.find(header.ref_table, clean);
         if (dictEntry) {
             return isNaN(dictEntry.ref_id) ? dictEntry.ref_id : Number(dictEntry.ref_id);
         }
@@ -176,7 +176,7 @@ class RefMatcher {
 
         // item dictionary fallback
         if (!itemId) {
-            const d = this.dictionary.find('item', cleanItem);
+            const d = await this.dictionary.find('item', cleanItem);
             if (d) itemId = Number(d.ref_id);
         }
 
@@ -242,7 +242,7 @@ class RefMatcher {
         for (const t of tables) {
             if (this._refCache[t]) continue;
             try {
-                this._refCache[t] = this.engine.table(t).getAll({}, { full: false });
+                this._refCache[t] = await this.engine.getAll(t, {}, { full: false });
             } catch {
                 this._refCache[t] = [];
                 console.warn(`[sutramexcel] Ref table "${t}" not in schema — skipping`);

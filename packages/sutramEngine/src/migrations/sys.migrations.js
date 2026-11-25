@@ -521,6 +521,11 @@ module.exports = [
          FROM sys_column`,
         `DROP TABLE sys_column`,
         `ALTER TABLE __sys_column_new RENAME TO sys_column`
+    ],
+
+    // ── version 9 — can_ocr capability flag on sys_user ─────────
+    [
+        `ALTER TABLE sys_user ADD COLUMN can_ocr INTEGER DEFAULT 1`
     ]
 
 ];

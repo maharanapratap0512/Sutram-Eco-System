@@ -311,6 +311,7 @@
                 [disabled]="isSqliteSelected"
                 placeholder="Pick existing or type new database name..."
                 styleClass="w-full p-inputtext-sm"
+                appendTo="body"
                 (onChange)="onDatabaseSelected($event)">
                 <ng-template let-item pTemplate="item">
                   <div class="flex align-items-center justify-content-between w-full">

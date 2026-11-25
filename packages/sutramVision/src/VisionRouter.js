@@ -11,7 +11,7 @@ class VisionRouter {
     const router = express.Router();
 
     // Middleware to extract credentials from headers or active database sys_meta
-    const extractHeaderCreds = req => {
+    const extractHeaderCreds = async req => {
       let provider = req.headers['x-vlm-provider'] || req.body?.provider || 'gemini';
       let apiKey = req.headers['x-vlm-api-key'] || req.body?.apiKey;
       let model = req.headers['x-vlm-model'] || req.body?.model;
@@ -20,12 +20,18 @@ class VisionRouter {
 
       let profiles = req.body?.apiProfiles || [];
 
-      // Fallback: If no apiKey was sent from frontend, read profiles directly from database sys_meta
-      if (!apiKey && req.projectDb) {
+      // Fallback: If no apiKey was sent from frontend, read profiles via sutramEngine (or legacy projectDb)
+      if (!apiKey) {
         try {
-          const row = req.projectDb.prepare(`SELECT value FROM sys_meta WHERE key = 'vision_profiles'`).get();
-          if (row && row.value) {
-            const dbProfiles = JSON.parse(row.value);
+          let rawVal = null;
+          if (req.sutramEngine && typeof req.sutramEngine.getMeta === 'function') {
+            rawVal = await req.sutramEngine.getMeta('vision_profiles');
+          } else if (req.projectDb) {
+            const row = req.projectDb.prepare(`SELECT value FROM sys_meta WHERE key = 'vision_profiles'`).get();
+            rawVal = row?.value ?? null;
+          }
+          if (rawVal) {
+            const dbProfiles = typeof rawVal === 'string' ? JSON.parse(rawVal) : rawVal;
             if (Array.isArray(dbProfiles) && dbProfiles.length > 0) {
               profiles = dbProfiles;
               const def = dbProfiles.find(p => p.isDefault) || dbProfiles[0];
@@ -66,13 +72,17 @@ class VisionRouter {
      * GET /profiles
      * Load vision profiles persisted in active database sys_meta
      */
-    router.get('/profiles', (req, res) => {
+    router.get('/profiles', async (req, res) => {
       try {
-        if (req.projectDb) {
+        let rawVal = null;
+        if (req.sutramEngine && typeof req.sutramEngine.getMeta === 'function') {
+          rawVal = await req.sutramEngine.getMeta('vision_profiles');
+        } else if (req.projectDb) {
           const row = req.projectDb.prepare(`SELECT value FROM sys_meta WHERE key = 'vision_profiles'`).get();
-          if (row && row.value) {
-            return res.json({ success: true, profiles: JSON.parse(row.value), source: 'database' });
-          }
+          rawVal = row?.value ?? null;
+        }
+        if (rawVal) {
+          return res.json({ success: true, profiles: typeof rawVal === 'string' ? JSON.parse(rawVal) : rawVal, source: 'database' });
         }
         return res.json({ success: true, profiles: [], source: 'none' });
       } catch (err) {
@@ -84,11 +94,15 @@ class VisionRouter {
      * POST /profiles
      * Persist vision profiles directly to active database sys_meta
      */
-    router.post('/profiles', (req, res) => {
+    router.post('/profiles', async (req, res) => {
       try {
         const { profiles } = req.body;
         if (!Array.isArray(profiles)) {
           return res.status(400).json({ success: false, message: 'profiles must be an array' });
+        }
+        if (req.sutramEngine && typeof req.sutramEngine.setMeta === 'function') {
+          await req.sutramEngine.setMeta('vision_profiles', profiles);
+          return res.json({ success: true, message: 'Vision profiles saved in database sys_meta' });
         }
         if (req.projectDb) {
           req.projectDb.prepare(`
@@ -122,7 +136,7 @@ class VisionRouter {
      */
     router.post('/extract', async (req, res) => {
       try {
-        const creds = extractHeaderCreds(req);
+        const creds = await extractHeaderCreds(req);
         const {
           image,
           imageBase64,
@@ -173,7 +187,7 @@ class VisionRouter {
      */
     router.post('/batch-extract', async (req, res) => {
       try {
-        const creds = extractHeaderCreds(req);
+        const creds = await extractHeaderCreds(req);
         const {
           images = [],
           documentType = 'tabular_register',

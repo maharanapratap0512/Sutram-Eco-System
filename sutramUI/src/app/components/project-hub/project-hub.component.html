@@ -115,6 +115,7 @@
       <!-- ── CARDS 3..N: Existing Projects beside it ────────────── -->
       <div
         class="project-card data-card"
+        [class.mysql-project-card]="p.db_type === 'mysql'"
         *ngFor="let p of filteredProjects"
         (click)="launchProject(p)"
         (contextmenu)="onCardContextMenu($event, p, cm)"
@@ -122,14 +123,25 @@
         <div class="card-top-bar">
           <div
             class="project-badge-icon"
-            [style.background-color]="(p.color || '#6366f1') + '20'"
-            [style.color]="p.color || '#6366f1'">
-            <i [class]="p.icon || 'pi pi-folder'"></i>
+            [style.background-color]="(p.color || (p.db_type === 'mysql' ? '#0ea5e9' : '#6366f1')) + '20'"
+            [style.color]="p.color || (p.db_type === 'mysql' ? '#0ea5e9' : '#6366f1')">
+            <i [class]="p.icon || (p.db_type === 'mysql' ? 'pi pi-server' : 'pi pi-folder')"></i>
           </div>
 
           <div class="card-top-actions">
+            <!-- MySQL Engine Indicator Badge -->
+            <p-tag
+              *ngIf="p.db_type === 'mysql'"
+              value="MySQL"
+              severity="warning"
+              icon="pi pi-server"
+              [rounded]="true"
+              title="MySQL Network Database">
+            </p-tag>
+
             <!-- Network Visibility Status Tag -->
             <p-tag
+              *ngIf="p.db_type !== 'mysql'"
               [severity]="isProjectLive(p.project_slug) ? 'success' : undefined"
               [styleClass]="!isProjectLive(p.project_slug) ? 'p-tag-secondary' : ''"
               [rounded]="true"
@@ -155,8 +167,12 @@
 
         <div class="card-content">
           <h3 class="project-title">{{ p.project_name }}</h3>
-          <p-tag icon="pi pi-database" styleClass="p-tag-secondary font-mono my-1" [value]="p.project_slug + '.db'"></p-tag>
-          <p class="project-desc">{{ p.description || 'Database workspace & spreadsheet studio' }}</p>
+          <p-tag
+            [icon]="p.db_type === 'mysql' ? 'pi pi-server' : 'pi pi-database'"
+            styleClass="p-tag-secondary font-mono my-1"
+            [value]="p.db_type === 'mysql' ? (p.db_file || p.project_slug) : (p.project_slug + '.db')">
+          </p-tag>
+          <p class="project-desc">{{ p.description || (p.db_type === 'mysql' ? 'MySQL live database workspace' : 'Database workspace & spreadsheet studio') }}</p>
         </div>
 
         <div class="card-footer">

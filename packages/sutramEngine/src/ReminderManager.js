@@ -15,26 +15,70 @@ class ReminderManager {
 
     constructor(engine) {
         this.engine = engine;
-        this.db = engine.db?.db || engine.db;
+        this.core = engine.core || null;
+        this.db = engine.db?.db || engine.db || null;
         this._cache = [];
         this._isEvaluating = false;
+    }
+
+    _q(id) {
+        return this.core?.quoteId ? this.core.quoteId(id) : `"${String(id).replace(/"/g, '""')}"`;
+    }
+
+    _nowStr(offsetMinutes = 0) {
+        const d = new Date(Date.now() + offsetMinutes * 60000);
+        const pad = n => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+
+    _dateStr(offsetDays = 0) {
+        const d = new Date(Date.now() + offsetDays * 86400000);
+        const pad = n => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    }
+
+    async _query(sql, params = []) {
+        const core = this.engine.core || this.core;
+        if (core?.query) return await core.query(sql, params);
+        const db = this._getDb();
+        if (db?.prepare) return db.prepare(sql).all(...(Array.isArray(params) ? params : [params]));
+        return [];
+    }
+
+    async _queryOne(sql, params = []) {
+        const core = this.engine.core || this.core;
+        if (core?.queryOne) return await core.queryOne(sql, params);
+        const db = this._getDb();
+        if (db?.prepare) return db.prepare(sql).get(...(Array.isArray(params) ? params : [params])) ?? null;
+        return null;
+    }
+
+    async _run(sql, params = []) {
+        const core = this.engine.core || this.core;
+        if (core?.run) return await core.run(sql, params);
+        const db = this._getDb();
+        if (db?.prepare) {
+            const r = db.prepare(sql).run(...(Array.isArray(params) ? params : [params]));
+            return { insertId: r.lastInsertRowid, lastInsertRowid: r.lastInsertRowid, changes: r.changes, affectedRows: r.changes };
+        }
+        return { changes: 0 };
     }
 
     // ─────────────────────────────────────────────────────────
     // BOOTSTRAP — Load active rules into cache
     // ─────────────────────────────────────────────────────────
 
-    load() {
+    async load() {
         this._cache = [];
         try {
-            const db = this._getDb();
-            if (!db) return;
+            const core = this.engine.core || this.core;
+            const hasTbl = core?.hasTable
+                ? await core.hasTable('sys_reminder_rule')
+                : Boolean(this._getDb()?.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='sys_reminder_rule'`).get());
 
-            // Check if sys_reminder_rule table exists
-            const tblCheck = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='sys_reminder_rule'`).get();
-            if (!tblCheck) return;
+            if (!hasTbl) return;
 
-            const rules = db.prepare(`SELECT * FROM sys_reminder_rule WHERE active = 1 ORDER BY _id ASC`).all();
+            const rules = await this._query(`SELECT * FROM sys_reminder_rule WHERE active = 1 ORDER BY _id ASC`);
             this._cache = rules || [];
             console.log(`[sutramEngine] ✓ ${this._cache.length} reminder rule(s) loaded from sys_`);
         } catch (err) {
@@ -46,8 +90,13 @@ class ReminderManager {
     // RULE MANAGEMENT (CRUD)
     // ─────────────────────────────────────────────────────────
 
-    getRules(filter = {}) {
-        const db = this._getDb();
+    async getRules(filter = {}) {
+        const core = this.engine.core || this.core;
+        if (core?.hasTable) {
+            const exists = await core.hasTable('sys_reminder_rule');
+            if (!exists) return [];
+        }
+
         let sql = `SELECT * FROM sys_reminder_rule WHERE 1=1`;
         const params = [];
 
@@ -65,15 +114,14 @@ class ReminderManager {
         }
 
         sql += ` ORDER BY _id DESC`;
-        return db.prepare(sql).all(...params);
+        return await this._query(sql, params);
     }
 
-    getRuleById(id) {
-        const db = this._getDb();
-        return db.prepare(`SELECT * FROM sys_reminder_rule WHERE _id = ?`).get(id);
+    async getRuleById(id) {
+        return await this._queryOne(`SELECT * FROM sys_reminder_rule WHERE _id = ?`, [id]);
     }
 
-    createRule(ruleDef) {
+    async createRule(ruleDef) {
         if (!ruleDef.rule_name || !String(ruleDef.rule_name).trim()) {
             throw new Error('Rule name is required');
         }
@@ -89,8 +137,7 @@ class ReminderManager {
             if (!ruleDef.target_datetime) throw new Error('target_datetime is required for normal reminders');
         }
 
-        const db = this._getDb();
-        const stmt = db.prepare(`
+        const info = await this._run(`
             INSERT INTO sys_reminder_rule (
                 rule_name, reminder_type, severity, is_permanent,
                 target_datetime, notes, target_table, target_column, col_type,
@@ -104,9 +151,7 @@ class ReminderManager {
                 ?, ?, ?, ?,
                 ?, ?
             )
-        `);
-
-        const info = stmt.run(
+        `, [
             String(ruleDef.rule_name).trim(),
             ruleDef.reminder_type,
             ruleDef.severity || 'warning',
@@ -126,28 +171,27 @@ class ReminderManager {
             ruleDef.sound_chime || 'default',
             ruleDef.active !== 0 ? 1 : 0,
             ruleDef.created_by || 'system'
-        );
+        ]);
 
-        this.load();
-        return info.lastInsertRowid;
+        await this.load();
+        return info.insertId ?? info.lastInsertRowid;
     }
 
-    updateRule(id, updates) {
-        const existing = this.getRuleById(id);
+    async updateRule(id, updates) {
+        const existing = await this.getRuleById(id);
         if (!existing) throw new Error(`Reminder rule with ID ${id} not found`);
 
         const merged = { ...existing, ...updates };
-        const db = this._getDb();
 
-        db.prepare(`
+        await this._run(`
             UPDATE sys_reminder_rule SET
                 rule_name = ?, reminder_type = ?, severity = ?, is_permanent = ?,
                 target_datetime = ?, notes = ?, target_table = ?, target_column = ?, col_type = ?,
                 operator = ?, operand_value = ?, condition_json = ?, schedule_time = ?,
                 frequency = ?, catch_up_if_missed = ?, message_template = ?, sound_chime = ?,
-                active = ?, updated_at = datetime('now', 'localtime')
+                active = ?, updated_at = ?
             WHERE _id = ?
-        `).run(
+        `, [
             merged.rule_name,
             merged.reminder_type,
             merged.severity,
@@ -166,28 +210,29 @@ class ReminderManager {
             merged.message_template,
             merged.sound_chime,
             merged.active ? 1 : 0,
+            this._nowStr(),
             id
-        );
+        ]);
 
-        this.load();
+        await this.load();
         return true;
     }
 
-    deleteRule(id) {
-        const db = this._getDb();
-        db.prepare(`DELETE FROM sys_reminder_log WHERE rule_id = ?`).run(id);
-        const res = db.prepare(`DELETE FROM sys_reminder_rule WHERE _id = ?`).run(id);
-        this.load();
-        return res.changes > 0;
+    async deleteRule(id) {
+        await this._run(`DELETE FROM sys_reminder_log WHERE rule_id = ?`, [id]);
+        const res = await this._run(`DELETE FROM sys_reminder_rule WHERE _id = ?`, [id]);
+        await this.load();
+        return (res.changes ?? res.affectedRows ?? 0) > 0;
     }
 
     // ─────────────────────────────────────────────────────────
-    // DYNAMIC CONDITION BUILDER (Datatype-Adaptive SQL)
+    // DYNAMIC CONDITION BUILDER (ANSI Dialect-Neutral SQL)
     // ─────────────────────────────────────────────────────────
 
     buildConditionSql(rule) {
         const col = String(rule.target_column || '').replace(/[^a-zA-Z0-9_]/g, '');
         if (!col) throw new Error('Invalid column name in rule');
+        const qCol = this._q(col);
 
         const op = String(rule.operator || '=').toLowerCase();
         const val = rule.operand_value;
@@ -199,74 +244,79 @@ class ReminderManager {
         // 1. Number Operators
         if (colType === 'number' || ['<', '<=', '>', '>=', 'between'].includes(op)) {
             const num = Number(val);
+            const castExpr = `CAST(${qCol} AS DECIMAL(18,4))`;
             if (op === '<') {
-                whereClause = `CAST(${col} AS REAL) < ?`;
+                whereClause = `${castExpr} < ?`;
                 params.push(num);
             } else if (op === '<=') {
-                whereClause = `CAST(${col} AS REAL) <= ?`;
+                whereClause = `${castExpr} <= ?`;
                 params.push(num);
             } else if (op === '>') {
-                whereClause = `CAST(${col} AS REAL) > ?`;
+                whereClause = `${castExpr} > ?`;
                 params.push(num);
             } else if (op === '>=') {
-                whereClause = `CAST(${col} AS REAL) >= ?`;
+                whereClause = `${castExpr} >= ?`;
                 params.push(num);
             } else if (op === '=' || op === '==') {
-                whereClause = `CAST(${col} AS REAL) = ?`;
+                whereClause = `${castExpr} = ?`;
                 params.push(num);
             } else if (op === '!=' || op === '<>') {
-                whereClause = `CAST(${col} AS REAL) != ?`;
+                whereClause = `${castExpr} != ?`;
                 params.push(num);
             } else if (op === 'between') {
-                let [min, max] = String(val).split(',').map(s => Number(s.trim()));
-                whereClause = `CAST(${col} AS REAL) BETWEEN ? AND ?`;
+                const [min, max] = String(val).split(',').map(s => Number(s.trim()));
+                whereClause = `${castExpr} BETWEEN ? AND ?`;
                 params.push(min || 0, max || 0);
             }
         }
-        // 2. Date Operators
+        // 2. Date Operators (computed via JS dates so zero dialect syntax divergence)
         else if (colType === 'date' || colType === 'datetime' || ['before_days', 'after_days', 'is_today', 'is_overdue'].includes(op)) {
             const days = parseInt(val, 10) || 0;
+            const todayStr = this._dateStr(0);
             if (op === 'before_days') {
-                // e.g. Insurance expires within next N days from today
-                whereClause = `date(${col}) <= date('now', 'localtime', '+' || ? || ' days') AND date(${col}) >= date('now', 'localtime')`;
-                params.push(days);
+                const futureStr = this._dateStr(days);
+                whereClause = `DATE(${qCol}) <= ? AND DATE(${qCol}) >= ?`;
+                params.push(futureStr, todayStr);
             } else if (op === 'after_days') {
-                whereClause = `date(${col}) >= date('now', 'localtime', '-' || ? || ' days') AND date(${col}) <= date('now', 'localtime')`;
-                params.push(days);
+                const pastStr = this._dateStr(-days);
+                whereClause = `DATE(${qCol}) >= ? AND DATE(${qCol}) <= ?`;
+                params.push(pastStr, todayStr);
             } else if (op === 'is_today') {
-                whereClause = `date(${col}) = date('now', 'localtime')`;
+                whereClause = `DATE(${qCol}) = ?`;
+                params.push(todayStr);
             } else if (op === 'is_overdue') {
-                whereClause = `date(${col}) < date('now', 'localtime')`;
+                whereClause = `DATE(${qCol}) < ?`;
+                params.push(todayStr);
             } else if (op === '<') {
-                whereClause = `date(${col}) < date(?)`;
+                whereClause = `DATE(${qCol}) < DATE(?)`;
                 params.push(String(val));
             } else if (op === '>') {
-                whereClause = `date(${col}) > date(?)`;
+                whereClause = `DATE(${qCol}) > DATE(?)`;
                 params.push(String(val));
             } else if (op === '=' || op === 'equals') {
-                whereClause = `date(${col}) = date(?)`;
+                whereClause = `DATE(${qCol}) = DATE(?)`;
                 params.push(String(val));
             }
         }
         // 3. String & Status Operators
         else if (colType === 'string' || colType === 'text') {
             if (op === '=' || op === 'equals') {
-                whereClause = `${col} = ?`;
+                whereClause = `${qCol} = ?`;
                 params.push(String(val));
             } else if (op === '!=' || op === 'not_equals') {
-                whereClause = `${col} != ?`;
+                whereClause = `${qCol} != ?`;
                 params.push(String(val));
             } else if (op === 'contains') {
-                whereClause = `${col} LIKE '%' || ? || '%'`;
-                params.push(String(val));
+                whereClause = `${qCol} LIKE ?`;
+                params.push(`%${String(val)}%`);
             } else if (op === 'is_empty') {
-                whereClause = `(${col} IS NULL OR trim(${col}) = '')`;
+                whereClause = `(${qCol} IS NULL OR TRIM(${qCol}) = '')`;
             } else if (op === 'is_not_empty') {
-                whereClause = `(${col} IS NOT NULL AND trim(${col}) != '')`;
+                whereClause = `(${qCol} IS NOT NULL AND TRIM(${qCol}) != '')`;
             } else if (op === 'in_list') {
                 const items = String(val).split(',').map(s => s.trim()).filter(Boolean);
                 if (items.length > 0) {
-                    whereClause = `${col} IN (${items.map(() => '?').join(',')})`;
+                    whereClause = `${qCol} IN (${items.map(() => '?').join(',')})`;
                     params.push(...items);
                 } else {
                     whereClause = `1=0`;
@@ -277,15 +327,15 @@ class ReminderManager {
         else if (colType === 'boolean') {
             const isTrue = val === true || val === 'true' || val === 1 || val === '1' || op === 'is_true';
             if (isTrue) {
-                whereClause = `(${col} = 1 OR ${col} = '1' OR ${col} = 'true')`;
+                whereClause = `(${qCol} = 1 OR ${qCol} = '1' OR ${qCol} = 'true')`;
             } else {
-                whereClause = `(${col} = 0 OR ${col} = '0' OR ${col} = 'false' OR ${col} IS NULL)`;
+                whereClause = `(${qCol} = 0 OR ${qCol} = '0' OR ${qCol} = 'false' OR ${qCol} IS NULL)`;
             }
         }
 
         // Fallback safety
         if (!whereClause) {
-            whereClause = `${col} = ?`;
+            whereClause = `${qCol} = ?`;
             params.push(String(val));
         }
 
@@ -316,9 +366,7 @@ class ReminderManager {
     // RULE EVALUATION ENGINE
     // ─────────────────────────────────────────────────────────
 
-    evaluateRule(rule, options = {}) {
-        const db = this._getDb();
-
+    async evaluateRule(rule, options = {}) {
         // A. Normal Time/Date Alarm Evaluation
         if (rule.reminder_type === 'normal') {
             if (!rule.target_datetime) return { triggered: false, count: 0, matches: [] };
@@ -343,13 +391,13 @@ class ReminderManager {
         // B. Smart Data Watchdog Evaluation
         const table = String(rule.target_table || '').replace(/[^a-zA-Z0-9_]/g, '');
         if (!table) return { triggered: false, count: 0, matches: [] };
+        const qTbl = this._q(table);
 
         const { whereClause, params } = this.buildConditionSql(rule);
 
         try {
-            // Count total matching records in target table
-            const countRow = db.prepare(`SELECT COUNT(*) as total_count FROM ${table} WHERE ${whereClause}`).get(...params);
-            const totalCount = countRow ? countRow.total_count : 0;
+            const countRow = await this._queryOne(`SELECT COUNT(*) as total_count FROM ${qTbl} WHERE ${whereClause}`, params);
+            const totalCount = Number(countRow ? countRow.total_count : 0);
 
             if (totalCount === 0) {
                 return {
@@ -366,8 +414,7 @@ class ReminderManager {
                 };
             }
 
-            // Retrieve sample matching rows (up to 5 for UI display & token formatting)
-            const sampleRows = db.prepare(`SELECT * FROM ${table} WHERE ${whereClause} LIMIT 5`).all(...params);
+            const sampleRows = await this._query(`SELECT * FROM ${qTbl} WHERE ${whereClause} LIMIT 5`, params);
             const sample = sampleRows[0] || {};
             const formattedMsg = this.formatMessage(rule.message_template, sample, totalCount, rule);
 
@@ -401,16 +448,24 @@ class ReminderManager {
     // EVALUATE ALL ACTIVE RULES & DISPATCH
     // ─────────────────────────────────────────────────────────
 
-    evaluateAll(options = {}) {
-        if (this._isEvaluating) return { status: 'already_evaluating' };
+    async evaluateAll(options = {}) {
+        if (this._isEvaluating) return { status: 'already_evaluating', activeAlerts: [], permanentAlerts: [], missedAlerts: [] };
         this._isEvaluating = true;
 
         try {
-            const db = this._getDb();
-            const rules = this.getRules({ active: true });
+            const core = this.engine.core || this.core;
+            if (core?.hasTable) {
+                const hasRuleTable = await core.hasTable('sys_reminder_rule');
+                if (!hasRuleTable) {
+                    return { success: true, activeAlerts: [], permanentAlerts: [], missedAlerts: [], resolvedCount: 0, evaluatedRulesCount: 0, timestamp: new Date().toISOString() };
+                }
+            }
+
+            const rules = await this.getRules({ active: true });
             const now = new Date();
-            const todayStr = now.toISOString().slice(0, 10); // YYYY-MM-DD
-            const currentHourMinute = now.toTimeString().slice(0, 5); // HH:MM
+            const todayStr = this._dateStr(0);
+            const currentHourMinute = now.toTimeString().slice(0, 5);
+            const nowStr = this._nowStr();
 
             const activeAlerts = [];
             const permanentAlerts = [];
@@ -418,41 +473,37 @@ class ReminderManager {
             let resolvedCount = 0;
 
             for (const rule of rules) {
-                const evalResult = this.evaluateRule(rule, options);
+                const evalResult = await this.evaluateRule(rule, options);
 
-                // Check existing active logs for this rule
-                const existingLog = db.prepare(`
+                const existingLog = await this._queryOne(`
                     SELECT * FROM sys_reminder_log
                     WHERE rule_id = ? AND status = 'active'
                     ORDER BY _id DESC LIMIT 1
-                `).get(rule._id);
+                `, [rule._id]);
 
-                // 1. AUTO-RESOLUTION: If permanent alert was active, but data condition is now cleared!
                 if (rule.is_permanent && existingLog && (!evalResult.triggered || evalResult.count === 0)) {
-                    db.prepare(`
+                    await this._run(`
                         UPDATE sys_reminder_log
                         SET status = 'auto_resolved',
                             is_permanent_active = 0,
                             resolution_note = 'Data condition cleared in database',
-                            updated_at = datetime('now', 'localtime')
+                            updated_at = ?
                         WHERE _id = ?
-                    `).run(existingLog._id);
+                    `, [nowStr, existingLog._id]);
                     resolvedCount++;
                     continue;
                 }
 
                 if (!evalResult.triggered) continue;
 
-                // 2. Frequency & Timing Policy
                 let shouldNotify = true;
                 let isMissed = false;
 
-                // Check last trigger log today
-                const todayLog = db.prepare(`
+                const todayLog = await this._queryOne(`
                     SELECT * FROM sys_reminder_log
-                    WHERE rule_id = ? AND strftime('%Y-%m-%d', triggered_at) = ?
+                    WHERE rule_id = ? AND DATE(triggered_at) = ?
                     ORDER BY _id DESC LIMIT 1
-                `).get(rule._id, todayStr);
+                `, [rule._id, todayStr]);
 
                 if (rule.schedule_time) {
                     const scheduledHHMM = rule.schedule_time.slice(0, 5);
@@ -460,27 +511,23 @@ class ReminderManager {
 
                     if (!todayLog) {
                         if (isPastScheduleTime) {
-                            // If user launched software after scheduled time (e.g. at 9 AM for a 3 AM alert)
                             if (rule.catch_up_if_missed) {
                                 isMissed = true;
                                 shouldNotify = true;
                             }
                         } else {
-                            // Scheduled for later today (e.g. 3 PM and currently 10 AM)
                             shouldNotify = false;
                         }
                     } else {
-                        // Already ran today
                         shouldNotify = false;
                     }
                 } else if (rule.frequency === 'daily_once' && todayLog) {
                     shouldNotify = false;
                 } else if (rule.frequency === 'once') {
-                    const anyPastLog = db.prepare(`SELECT _id FROM sys_reminder_log WHERE rule_id = ? LIMIT 1`).get(rule._id);
+                    const anyPastLog = await this._queryOne(`SELECT _id FROM sys_reminder_log WHERE rule_id = ? LIMIT 1`, [rule._id]);
                     if (anyPastLog) shouldNotify = false;
                 }
 
-                // Check active snooze
                 if (existingLog && existingLog.status === 'snoozed' && existingLog.snoozed_until) {
                     const snoozeUntil = new Date(existingLog.snoozed_until).getTime();
                     if (Date.now() < snoozeUntil) {
@@ -488,16 +535,15 @@ class ReminderManager {
                     }
                 }
 
-                // Record in sys_reminder_log (insert once or update existing)
                 let currentLogId = existingLog ? existingLog._id : null;
                 if (!existingLog) {
-                    const ins = db.prepare(`
+                    const ins = await this._run(`
                         INSERT INTO sys_reminder_log (
                             rule_id, rule_name, severity, message, target_table, target_column,
                             matching_count, sample_records_json, status, is_permanent_active
                         )
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
-                    `).run(
+                    `, [
                         rule._id,
                         rule.rule_name,
                         rule.severity || 'warning',
@@ -507,27 +553,27 @@ class ReminderManager {
                         evalResult.count,
                         JSON.stringify(evalResult.sampleRecords || []),
                         rule.is_permanent ? 1 : 0
-                    );
-                    currentLogId = ins.lastInsertRowid;
+                    ]);
+                    currentLogId = ins.insertId ?? ins.lastInsertRowid;
                 } else {
-                    db.prepare(`
+                    await this._run(`
                         UPDATE sys_reminder_log
                         SET matching_count = ?,
                             sample_records_json = ?,
                             message = ?,
                             severity = ?,
-                            updated_at = datetime('now', 'localtime')
+                            updated_at = ?
                         WHERE _id = ?
-                    `).run(
+                    `, [
                         evalResult.count,
                         JSON.stringify(evalResult.sampleRecords || []),
                         evalResult.message || rule.message_template || '',
                         rule.severity || 'warning',
+                        nowStr,
                         existingLog._id
-                    );
+                    ]);
                 }
 
-                // Permanent alerts must ALWAYS remain present in permanent list
                 if (rule.is_permanent) {
                     permanentAlerts.push({
                         ...evalResult,
@@ -567,27 +613,27 @@ class ReminderManager {
     // SNOOZE & DISMISS ACTIONS
     // ─────────────────────────────────────────────────────────
 
-    snooze(logId, minutes = 15) {
-        const db = this._getDb();
+    async snooze(logId, minutes = 15) {
         const mins = parseInt(minutes, 10) || 15;
-        db.prepare(`
+        const nowStr = this._nowStr();
+        const snoozeUntilStr = this._nowStr(mins);
+        await this._run(`
             UPDATE sys_reminder_log
             SET status = 'snoozed',
-                snoozed_until = datetime('now', 'localtime', '+' || ? || ' minutes'),
-                updated_at = datetime('now', 'localtime')
+                snoozed_until = ?,
+                updated_at = ?
             WHERE _id = ?
-        `).run(mins, logId);
+        `, [snoozeUntilStr, nowStr, logId]);
         return true;
     }
 
-    dismiss(logId, user = 'admin', overrideReason = '') {
-        const db = this._getDb();
-        const log = db.prepare(`
+    async dismiss(logId, user = 'admin', overrideReason = '') {
+        const log = await this._queryOne(`
             SELECT l.*, r.is_permanent, r.rule_name
             FROM sys_reminder_log l
             JOIN sys_reminder_rule r ON r._id = l.rule_id
             WHERE l._id = ?
-        `).get(logId);
+        `, [logId]);
 
         if (!log) throw new Error(`Reminder log ${logId} not found`);
 
@@ -595,22 +641,23 @@ class ReminderManager {
             throw new Error(`Permanent alert "${log.rule_name}" cannot be dismissed until data condition is resolved in database. Admin override reason required.`);
         }
 
-        db.prepare(`
+        const nowStr = this._nowStr();
+        await this._run(`
             UPDATE sys_reminder_log
             SET status = 'dismissed',
-                dismissed_at = datetime('now', 'localtime'),
+                dismissed_at = ?,
                 dismissed_by = ?,
                 resolution_note = ?,
                 is_permanent_active = 0,
-                updated_at = datetime('now', 'localtime')
+                updated_at = ?
             WHERE _id = ?
-        `).run(user, overrideReason || 'User dismissed', logId);
+        `, [nowStr, user, overrideReason || 'User dismissed', nowStr, logId]);
 
         return true;
     }
 
-    testRule(ruleDef) {
-        const evalResult = this.evaluateRule(ruleDef, { dryRun: true });
+    async testRule(ruleDef) {
+        const evalResult = await this.evaluateRule(ruleDef, { dryRun: true });
         return {
             success: true,
             rule_name: ruleDef.rule_name,

@@ -301,6 +301,11 @@ module.exports = [
     [
         `CREATE INDEX idx_sys_col_tbl ON sys_column(table_id)`,
         `CREATE INDEX idx_sys_join_tbl ON sys_join(table_id)`
+    ],
+
+    // ── version 9 — can_ocr capability flag on sys_user ───────────
+    [
+        `ALTER TABLE sys_user ADD COLUMN can_ocr TINYINT(1) DEFAULT 1`
     ]
 
 ];

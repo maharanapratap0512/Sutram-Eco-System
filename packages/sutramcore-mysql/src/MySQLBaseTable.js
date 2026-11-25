@@ -40,6 +40,13 @@ class MySQLBaseTable {
 
         this.columns = meta.columns;
         this.joins   = meta.joins ?? {};
+
+        // Resolve primary key column dynamically (matching BaseTable parity)
+        this.pkName = Object.keys(this.columns).find(c => this.columns[c]?.pk)
+            || ('_id' in this.columns ? '_id' : null)
+            || ('id' in this.columns ? 'id' : null)
+            || Object.keys(this.columns)[0]
+            || '_id';
     }
 
     // ─────────────────────────────────────────────────────────
@@ -56,12 +63,12 @@ class MySQLBaseTable {
     async update(data, where, full = true) {
         const [sql, params] = this._buildUpdate(data, where);
         await this.adapter.run(sql, params);
-        const id = typeof where === 'object' ? (where._id ?? null) : null;
+        const id = typeof where === 'object' ? (where[this.pkName] ?? where._id ?? where.id ?? null) : null;
         return full && id ? this.getById(id) : id;
     }
 
     async updateById(data, id, full = true) {
-        return this.update(data, { _id: id }, full);
+        return this.update(data, { [this.pkName]: id }, full);
     }
 
     async delete(where) {
@@ -73,11 +80,11 @@ class MySQLBaseTable {
     }
 
     async deleteById(id) {
-        return this.delete({ _id: id });
+        return this.delete({ [this.pkName]: id });
     }
 
     async getById(id) {
-        return this.getOne({ _id: id });
+        return this.getOne({ [this.pkName]: id });
     }
 
     async getOne(where, { full = true } = {}) {
@@ -148,7 +155,7 @@ class MySQLBaseTable {
         for (const colName in this.columns) {
             const def = this.columns[colName];
 
-            if (mode === 'insert' && colName === '_id') continue;
+            if (mode === 'insert' && (colName === this.pkName || colName === '_id' || colName === 'id' || def.pk)) continue;
             if (mode === 'update' && !(colName in data)) continue;
 
             let val = colName in data ? data[colName] : def.default;
@@ -173,7 +180,12 @@ class MySQLBaseTable {
                     val = (val !== null && val !== undefined && val !== '') ? Number(val) : null;
                     break;
                 case 'string':
-                    val = (val !== null && val !== undefined) ? String(val).trim() : null;
+                case 'date':
+                case 'datetime':
+                    val = (val !== null && val !== undefined && val !== '') ? String(val).trim() : null;
+                    break;
+                case 'password':
+                    val = (val !== null && val !== undefined) ? String(val) : null;
                     break;
             }
 
@@ -259,6 +271,9 @@ class MySQLBaseTable {
 
     _buildUpdate(data, where) {
         const clean = this.sanitize(data, 'update');
+        if (this.pkName) delete clean[this.pkName];
+        delete clean._id;
+        delete clean.id;
         if (Object.keys(clean).length === 0) throw new Error(`[sutramcore-mysql] No valid fields to update in "${this.tableName}"`);
 
         const { clause, params: whereParams } = this._buildWhere(where);
@@ -301,18 +316,60 @@ class MySQLBaseTable {
             return { clause: trimmed ? `WHERE ${trimmed}` : '', params: [] };
         }
 
+        if (typeof where === 'object' && typeof where.__sql === 'string') {
+            const trimmed = where.__sql.trim();
+            return {
+                clause: trimmed ? `WHERE ${trimmed}` : '',
+                params: Array.isArray(where.__params) ? where.__params : []
+            };
+        }
+
         if (typeof where === 'object') {
             const keys = Object.keys(where);
             if (keys.length === 0) return { clause: '', params: [] };
 
+            const params = [];
             const clause = keys.map(k => {
-                const colExpr = (prefixTable && !k.includes('.'))
-                    ? `\`${this.tableName}\`.\`${k}\``
-                    : `\`${k}\``;
+                let colKey = k;
+                if (this.columns && !this.columns[colKey]) {
+                    if ((colKey === '_id' || colKey === 'id') && this.pkName) {
+                        colKey = this.pkName;
+                    }
+                }
+                const colExpr = (prefixTable && !colKey.includes('.'))
+                    ? `\`${this.tableName}\`.\`${colKey}\``
+                    : `\`${colKey}\``;
+                const val = where[k];
+
+                if (Array.isArray(val)) {
+                    if (val.length === 0) return '1=0';
+                    params.push(...val);
+                    return `${colExpr} IN (${val.map(() => '?').join(', ')})`;
+                }
+                if (val !== null && typeof val === 'object' && val.constructor === Object) {
+                    const opKeys = Object.keys(val);
+                    if (opKeys.length > 0) {
+                        const subClauses = opKeys.map(op => {
+                            const subVal = val[op];
+                            const upperOp = op.trim().toUpperCase();
+                            if (subVal === null) {
+                                if (upperOp === '!=' || upperOp === '<>' || upperOp === 'IS NOT') return `${colExpr} IS NOT NULL`;
+                                if (upperOp === '=' || upperOp === 'IS') return `${colExpr} IS NULL`;
+                            }
+                            params.push(subVal);
+                            return `${colExpr} ${op} ?`;
+                        });
+                        return subClauses.join(' AND ');
+                    }
+                }
+                if (val === null) {
+                    return `${colExpr} IS NULL`;
+                }
+                params.push(val);
                 return `${colExpr} = ?`;
             }).join(' AND ');
 
-            return { clause: `WHERE ${clause}`, params: Object.values(where) };
+            return { clause: `WHERE ${clause}`, params };
         }
 
         return { clause: '', params: [] };
@@ -327,6 +384,7 @@ class MySQLBaseTable {
             if (!def.ref) continue;
 
             const [refTable, refCol] = def.ref.split('.');
+            if (!refTable || !this.schema[refTable]) continue;
             const alias = def.as ?? refTable;
 
             joinParts.push(
@@ -335,9 +393,10 @@ class MySQLBaseTable {
 
             if (def.select) {
                 const cols     = this._resolveSelect(def.select, refTable);
-                // MySQL: JSON_OBJECT instead of json_object
-                const jsonArgs = cols.map(c => `'${c}', \`${alias}\`.\`${c}\``).join(', ');
-                selectParts.push(`JSON_OBJECT(${jsonArgs}) AS \`${alias}\``);
+                if (cols.length > 0) {
+                    const jsonArgs = cols.map(c => `'${c}', \`${alias}\`.\`${c}\``).join(', ');
+                    selectParts.push(`JSON_OBJECT(${jsonArgs}) AS \`${alias}\``);
+                }
             }
         }
 
@@ -346,11 +405,13 @@ class MySQLBaseTable {
             if (!def.hasMany) continue;
 
             const childTable = def.table;
+            if (!childTable || !this.schema[childTable]) continue;
             const childAlias = `_sub_${joinKey}`;
             const outKey     = def.as ?? joinKey;
             const childMeta  = this.schema[childTable];
 
             const baseCols   = this._resolveSelect(def.select ?? '*', childTable);
+            if (baseCols.length === 0) continue;
             let jsonArgParts = baseCols.map(c => `'${c}', \`${childAlias}\`.\`${c}\``);
 
             const childJoinParts = [];
@@ -358,8 +419,10 @@ class MySQLBaseTable {
                 for (const [cCol, cDef] of Object.entries(childMeta.columns)) {
                     if (!cDef.ref) continue;
                     const [gRefTable, gRefCol] = cDef.ref.split('.');
+                    if (!gRefTable || !this.schema[gRefTable]) continue;
                     const gAlias  = `${childAlias}_${cDef.as ?? gRefTable}`;
                     const gCols   = this._resolveSelect(cDef.select ?? '*', gRefTable);
+                    if (gCols.length === 0) continue;
                     const gJson   = gCols.map(gc => `'${gc}', \`${gAlias}\`.\`${gc}\``).join(', ');
                     childJoinParts.push(
                         `LEFT JOIN \`${gRefTable}\` AS \`${gAlias}\` ON \`${gAlias}\`.\`${gRefCol}\` = \`${childAlias}\`.\`${cCol}\``
@@ -385,11 +448,13 @@ class MySQLBaseTable {
 
             const targetTable = def.table;
             const juncTable   = def.junction;
+            if (!targetTable || !juncTable || !this.schema[targetTable]) continue;
             const targetAlias = `_sub_${joinKey}`;
             const juncAlias   = `_junc_${joinKey}`;
             const outKey      = def.as ?? joinKey;
 
             const cols     = this._resolveSelect(def.select ?? '*', targetTable);
+            if (cols.length === 0) continue;
             const jsonArgs = cols.map(c => `'${c}', \`${targetAlias}\`.\`${c}\``).join(', ');
 
             const subQuery = `(
@@ -410,10 +475,26 @@ class MySQLBaseTable {
     }
 
     _resolveSelect(select, refTable) {
-        if (select !== '*') return select;
         const meta = this.schema[refTable];
-        if (!meta) throw new Error(`[sutramcore-mysql] Cannot resolve "*" for "${refTable}" — not in schema`);
-        return Object.keys(meta.columns);
+        const allCols = meta ? Object.keys(meta.columns) : [];
+        if (!meta) {
+            return (typeof select === 'string' && select !== '*')
+                ? [select]
+                : (Array.isArray(select) ? select.filter(x => x !== '*') : []);
+        }
+        if (!select || select === '*') {
+            return allCols;
+        }
+        if (Array.isArray(select)) {
+            if (select.length === 0 || select.includes('*')) {
+                return allCols;
+            }
+            return select;
+        }
+        if (typeof select === 'string') {
+            return [select];
+        }
+        return allCols;
     }
 }
 

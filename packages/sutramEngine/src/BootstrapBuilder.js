@@ -8,30 +8,58 @@
 
 class BootstrapBuilder {
 
-    constructor(dbOrAdapter) {
-        this.db = dbOrAdapter;
-        this.isAsync = typeof dbOrAdapter?.prepare !== 'function' && (typeof dbOrAdapter?.all === 'function' || typeof dbOrAdapter?.adapter?.all === 'function');
+    constructor(coreOrAdapter) {
+        this.core = (coreOrAdapter && typeof coreOrAdapter.query === 'function' && typeof coreOrAdapter.listPhysicalTables === 'function')
+            ? coreOrAdapter : null;
+        this.db = coreOrAdapter;
+        this.isAsync = Boolean(this.core) || (typeof coreOrAdapter?.prepare !== 'function' && (typeof coreOrAdapter?.all === 'function' || typeof coreOrAdapter?.adapter?.all === 'function'));
     }
 
-    // ── Main entry point (sync for SQLite, async for MySQL) ─────
-    build() {
-        if (this.isAsync) {
-            return this.buildAsync();
+    // ── Main entry point (polymorphic async over Core contract) ─
+    async build() {
+        if (!this.core) {
+            if (typeof this.db?.all === 'function' || typeof this.db?.adapter?.all === 'function') {
+                return await this.buildAsync();
+            }
+            const tables  = this._loadTables();
+            const columns = this._loadColumns();
+            const joins   = this._loadJoins();
+            const physicalTables = new Set(
+                this.db.prepare(`SELECT name FROM sqlite_master WHERE type IN ('table', 'view')`).all().map(r => r.name)
+            );
+            const activeTables = new Set(tables.map(t => t.table_name).filter(name => physicalTables.has(name)));
+            const meta = {};
+            for (const table of tables) {
+                if (!physicalTables.has(table.table_name)) continue;
+                meta[table.table_name] = {
+                    columns: this._buildColumns(columns.filter(c => c.table_id === table._id), activeTables, table.table_name),
+                    joins:   this._buildJoins(joins.filter(j => j.table_id === table._id), activeTables),
+                };
+            }
+            return meta;
         }
-        const tables  = this._loadTables();
-        const columns = this._loadColumns();
-        const joins   = this._loadJoins();
 
-        // Build set of physically existing active tables so dangling FKs never crash the app
-        const physicalTables = new Set(
-            this.db.prepare(`SELECT name FROM sqlite_master WHERE type IN ('table', 'view')`).all().map(r => r.name)
-        );
+        const tables = await this.core.query(`SELECT * FROM sys_table WHERE active = 1 ORDER BY _id ASC`);
+        const columns = await this.core.query(`
+            SELECT c.* FROM sys_column c
+            INNER JOIN sys_table t ON t._id = c.table_id
+            WHERE c.active = 1 AND t.active = 1
+            ORDER BY c.table_id ASC, c.sort_order ASC, c._id ASC
+        `);
+        const joins = await this.core.query(`
+            SELECT j.* FROM sys_join j
+            INNER JOIN sys_table t ON t._id = j.table_id
+            WHERE j.active = 1 AND t.active = 1
+            ORDER BY j.table_id ASC, j._id ASC
+        `);
+
+        const physNames = await this.core.listPhysicalTables();
+        const physicalTables = new Set(physNames || []);
         const activeTables = new Set(
             tables.map(t => t.table_name).filter(name => physicalTables.has(name))
         );
 
         const meta = {};
-
         for (const table of tables) {
             if (!physicalTables.has(table.table_name)) continue;
             const tableCols = columns.filter(c => c.table_id === table._id);

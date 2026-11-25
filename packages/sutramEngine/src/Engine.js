@@ -50,82 +50,62 @@ class Engine {
     // ─────────────────────────────────────────────────────────
 
     constructor({
-        // Pattern 1
+        // Pattern 1 / Managed Core — pass any Core instance (Sutram, MySQLSutram, or future DB Core)
         sutram = null,
+        core = null,
 
-        // Pattern 2 + 3 — db source (one of these)
+        // Convenience SQLite options (Engine delegates opening to sutramcore)
         db = null,
         dbPath = null,
 
-        // Pattern 2 — direct schema
+        // Direct mode options
         schema = null,
         triggers = null,
         reports = null,
+
+        // Optional explicit mode override ('managed' | 'direct')
+        mode = null,
     } = {}) {
 
-        // ── resolve db ────────────────────────────────────────
+        const givenCore = core || sutram;
 
-        if (sutram) {
-            // Pattern 1 — accept sutramCore Sutram OR sutramcore-mysql MySQLSutram
-            const isSQLite = typeof sutram.db?.prepare === 'function';
-            const isMySQL = sutram.dialect === 'mysql';
-
-            if (!isSQLite && !isMySQL) {
+        if (givenCore) {
+            if (typeof givenCore.table !== 'function' || (typeof givenCore.query !== 'function' && typeof givenCore.db?.prepare !== 'function')) {
                 throw new Error(
-                    '[sutramEngine] sutram must be a sutramCore Sutram instance ' +
-                    'or a sutramcore-mysql MySQLSutram instance'
+                    '[sutramEngine] core/sutram must be a valid sutramcore or sutramcore-mysql instance'
                 );
             }
-
-            this.db = isSQLite ? sutram.db : null;
-            this._adapter = isMySQL ? sutram.adapter : null;
-            this._dialect = isMySQL ? 'mysql' : 'sqlite';
-            this._sutram = sutram;
+            this.core = givenCore;
+            this._sutram = givenCore;
+            this.db = givenCore.db ?? null;
             this._ownsSutram = false;
-
-        } else if (db) {
-            // Pattern 2/3 Option A — caller passes ready db
-            if (typeof db.prepare !== 'function') {
-                throw new Error(
-                    '[sutramEngine] db must be a better-sqlite3 Database instance'
-                );
-            }
-            this.db = db;
-            this._sutram = null;
+        } else if (db || dbPath) {
+            const { Sutram } = require('sutramcore');
+            this.core = new Sutram({ db, dbPath, schema: schema || {} });
+            this._sutram = this.core;
+            this.db = this.core.db;
             this._ownsSutram = true;
-
-        } else if (dbPath) {
-            // Pattern 2/3 Option B — engine opens the file
-            const Database = require('better-sqlite3');
-            this.db = new Database(dbPath);
-            this.db.pragma('journal_mode = WAL');
-            this.db.pragma('foreign_keys = ON');
-            this.db.pragma('synchronous = NORMAL');
-            this.db.pragma('busy_timeout = 10000');
-            this._sutram = null;
-            this._ownsSutram = true;
-            console.log(`[sutramEngine] Connected: ${dbPath}`);
-
         } else {
             throw new Error(
                 '[sutramEngine] One of these is required:\n' +
-                '  sutram  — sutramCore Sutram OR MySQLSutram instance  (Pattern 1)\n' +
-                '  db      — better-sqlite3 Database instance            (Pattern 2/3)\n' +
-                '  dbPath  — path to SQLite file                         (Pattern 2/3)'
+                '  core / sutram — sutramcore Sutram OR sutramcore-mysql MySQLSutram instance\n' +
+                '  db            — better-sqlite3 Database instance\n' +
+                '  dbPath        — path to SQLite file'
             );
         }
 
         // ── detect mode ───────────────────────────────────────
-        // direct  → schema provided by caller (Pattern 1 or 2)
-        // managed → schema lives in sys_ tables (Pattern 3)
-
-        if (sutram || schema) {
+        // managed → schema lives in sys_ tables (default when schema is empty / omitted)
+        // direct  → schema provided directly by caller
+        if (mode === 'direct' || mode === 'managed') {
+            this._mode = mode;
+        } else if (schema || (givenCore && Object.keys(givenCore.schema || {}).length > 0)) {
             this._mode = 'direct';
         } else {
             this._mode = 'managed';
         }
 
-        // ── store direct-mode schema ──────────────────────────
+        // ── store direct-mode config ──────────────────────────
         this._directSchema = schema;
         this._directTriggers = triggers ?? [];
         this._directReports = reports ?? [];
@@ -133,70 +113,62 @@ class Engine {
         // ── internal state ────────────────────────────────────
         this._schema = {};
         this._tableCache = {};
-        this._dialect = this._dialect ?? 'sqlite';
-        this._adapter = this._adapter ?? null;
 
-        // ── sub-managers ──────────────────────────────────────
-        // TriggerManager and ReportManager always read from sys_
-        // in managed mode, or from direct arrays in direct mode
-        this.trigger = new TriggerManager(this.db);
+        // ── sub-managers (all operate uniformly through Engine / Core) ─
+        this.trigger = new TriggerManager(this);
         this.triggers = this.trigger;
-        this.report = new ReportManager(this.db);
+        this.report = new ReportManager(this);
         this.reports = this.report;
-        this.schema = new SchemaManager(this.db, () => this.rebootstrap());
+        this.schema = new SchemaManager(this.db, () => this.rebootstrap(), this);
         this.ui = new UiManager(this);
         this.reminder = new ReminderManager(this);
         this.reminders = this.reminder;
     }
 
+    // Polymorphic Core metadata getters (zero dialect branching)
+    get dialect() { return this.core?.dialect || 'sqlite'; }
+    get _dialect() { return this.dialect; }
+    get _adapter() { return this.core?.adapter || null; }
+    get dbName() { return this.core?.dbName || 'active'; }
+    get inTransaction() { return Boolean(this.core?.inTransaction); }
+
     // ─────────────────────────────────────────────────────────
-    // INIT
-    // Always call after constructor: new SutramEngine(...).init()
-    //
-    // Managed mode → runs sys_ migrations → rebootstrap
-    // Direct mode  → runs only sys_meta migration (minimal)
-    //                → rebootstrap with provided schema
+    // INIT — Uniform Async Lifecycle (SQLite, MySQL, or any DB)
+    // Always call: await new SutramEngine(...).init()
     // ─────────────────────────────────────────────────────────
 
-    init() {
-        // sys_ migrations always run — even in direct mode
-        // direct mode only needs sys_meta for engine version tracking
-        // other sys_ tables created but not used
-        new SysMigrator(this.db).run();
+    async init() {
+        if (typeof this.core.connect === 'function' && !this._ownsSutram) {
+            if (this.core.dialect === 'mysql' && !this.core.adapter?.pool) {
+                await this.core.connect();
+            }
+        }
 
-        this.rebootstrap();
-        console.log(`[sutramEngine] Ready — mode: ${this._mode}`);
-        return this; // chainable
+        const migrator = new SysMigrator(this.core);
+        await migrator.run();
+
+        await this.rebootstrap();
+        console.log(`[sutramEngine] Ready — dialect: ${this.dialect}, mode: ${this._mode}`);
+        return this;
     }
 
     // ─────────────────────────────────────────────────────────
-    // REBOOTSTRAP
-    // Rebuilds schema + Sutram instance + all caches.
-    // Called automatically after every schema change.
-    //
-    // Direct mode  → uses _directSchema (provided by caller)
-    // Managed mode → reads sys_table / sys_column / sys_join
+    // REBOOTSTRAP — Uniform Async Schema & Manager Sync
     // ─────────────────────────────────────────────────────────
 
-    rebootstrap() {
+    async rebootstrap() {
         if (this._mode === 'direct') {
-            this._rebootstrapDirect();
+            await this._rebootstrapDirect();
         } else {
-            if (this._dialect === 'mysql') {
-                return this._rebootstrapManagedAsync();
-            }
-            this._rebootstrapManaged();
+            await this._rebootstrapManaged();
         }
 
         const count = Object.keys(this._schema || {}).length;
-        console.log(`[sutramEngine] Bootstrapped — ${count} table(s), mode: ${this._mode}`);
+        console.log(`[sutramEngine] Bootstrapped — ${count} table(s), dialect: ${this.dialect}, mode: ${this._mode}`);
     }
 
-    _rebootstrapDirect() {
-        const { Sutram } = require('sutramcore');
-
+    async _rebootstrapDirect() {
         if (this._ownsSutram) {
-            // Pattern 2 — we own the Sutram instance, build from direct schema
             if (!this._directSchema) {
                 throw new Error(
                     '[sutramEngine] Direct mode requires schema.\n' +
@@ -204,26 +176,16 @@ class Engine {
                 );
             }
             this._schema = this._directSchema;
-            this._sutram = new Sutram({ db: this.db, schema: this._schema });
+            this.core.setSchema(this._schema);
 
-            // load triggers + reports from direct arrays
-            this.trigger.loadFromArray(this._directTriggers);
-            this.report.loadFromArray(this._directReports);
-
+            await this.trigger.loadFromArray(this._directTriggers);
+            await this.report.loadFromArray(this._directReports);
         } else {
-            // Pattern 1 — caller passed Sutram or MySQLSutram instance
-            this._schema = this._sutram.schema;
-            // do NOT replace this._sutram — caller owns it
-
-            if (this._dialect === 'mysql') {
-                // MySQL — proxy report manager from MySQLSutram
-                // MySQLSutram.report is MySQLReportManager (already initialized)
-                // engine.procedure() will delegate to it automatically
-                this.report = this._sutram.report;
-                this.trigger.loadFromArray(this._directTriggers);
+            this._schema = this.core.schema;
+            this.trigger.loadFromArray(this._directTriggers);
+            if (this.core.report && typeof this.core.report.loadFromArray === 'function') {
+                if (this._directReports?.length) this.core.report.loadFromArray(this._directReports);
             } else {
-                // SQLite Pattern 1 — use engine's own ReportManager
-                this.trigger.loadFromArray(this._directTriggers);
                 this.report.loadFromArray(this._directReports);
             }
         }
@@ -231,30 +193,24 @@ class Engine {
         this._tableCache = {};
     }
 
-    _rebootstrapManaged() {
-        const { Sutram } = require('sutramcore');
-
-        // read everything from sys_ tables
-        const builder = new BootstrapBuilder(this.db);
-        this._schema = builder.build();
-
-        // always create fresh Sutram in managed mode
-        this._sutram = new Sutram({ db: this.db, schema: this._schema });
+    async _rebootstrapManaged() {
+        const builder = new BootstrapBuilder(this.core);
+        this._schema = await builder.build();
+        this.core.setSchema(this._schema);
+        this._sutram = this.core;
         this._tableCache = {};
 
-        // load triggers + reports from sys_ tables
-        this.trigger.load();
-        this.report.load();
-        this.reminder.load();
+        await this.trigger.load();
+        await this.report.load();
+        await this.reminder.load();
+        if (this.core.report && typeof this.core.report.load === 'function') {
+            try { await this.core.report.load(); } catch {}
+        }
     }
 
+    // Backward-compatible alias
     async _rebootstrapManagedAsync() {
-        const { MySQLSutram } = require('sutramcore-mysql');
-        const builder = new BootstrapBuilder(this._adapter);
-        this._schema = await builder.buildAsync();
-        this._sutram = new MySQLSutram({ adapter: this._adapter, schema: this._schema });
-        await this._sutram.connect();
-        this._tableCache = {};
+        return await this._rebootstrapManaged();
     }
 
     // ─────────────────────────────────────────────────────────
@@ -274,54 +230,63 @@ class Engine {
     }
 
     // ─────────────────────────────────────────────────────────
-    // TRIGGER-AWARE CRUD
-    // Wraps sutramCore operations + fires triggers.
-    // All operations + trigger actions in same transaction → atomic.
+    // TRIGGER-AWARE CRUD (Uniform Async Footprint + Rule 13 Tx)
     // ─────────────────────────────────────────────────────────
 
-    insert(tableName, data, full = true) {
+    async insert(tableName, data, full = true) {
         const tbl = this.table(tableName);
         const pk = tbl.pkName || '_id';
-        const result = this.db.transaction(() => {
-            const id = tbl.insert(data, false);
-            const newRow = tbl.getOne({ [pk]: id }, { full: false });
-            this.trigger.execute(tableName, 'INSERT', newRow, null);
-            return id;
-        })();
-        return full ? tbl.getById(result) : result;
+        const needTx = !this.core.inTransaction;
+        let id;
+        try {
+            if (needTx) await this.core.begin();
+            id = await tbl.insert(data, false);
+            const newRow = await tbl.getOne({ [pk]: id }, { full: false });
+            await this.trigger.execute(tableName, 'INSERT', newRow, null);
+            if (needTx) await this.core.commit();
+        } catch (err) {
+            if (needTx && this.core.inTransaction) await this.core.rollback();
+            throw err;
+        }
+        return full ? await tbl.getById(id) : id;
     }
 
-    update(tableName, data, where, full = true) {
+    async update(tableName, data, where, full = true) {
         const tbl = this.table(tableName);
         const pk = tbl.pkName || '_id';
         const id = typeof where === 'object' ? (where[pk] ?? where._id ?? where.id ?? null) : null;
-        const oldRow = id ? tbl.getOne({ [pk]: id }, { full: false }) : null;
+        const oldRow = id ? await tbl.getOne({ [pk]: id }, { full: false }) : null;
 
-        const result = this.db.transaction(() => {
-            tbl.update(data, where, false);
-            const newRow = id ? tbl.getOne({ [pk]: id }, { full: false }) : null;
-            this.trigger.execute(tableName, 'UPDATE', newRow, oldRow);
-            return id;
-        })();
+        const needTx = !this.core.inTransaction;
+        let result;
+        try {
+            if (needTx) await this.core.begin();
+            result = await tbl.update(data, where, false);
+            const resolvedId = id ?? result;
+            const newRow = resolvedId ? await tbl.getOne({ [pk]: resolvedId }, { full: false }) : null;
+            await this.trigger.execute(tableName, 'UPDATE', newRow, oldRow);
+            if (needTx) await this.core.commit();
+        } catch (err) {
+            if (needTx && this.core.inTransaction) await this.core.rollback();
+            throw err;
+        }
 
-        return full && result ? tbl.getById(result) : result;
+        return full && (result ?? id) ? await tbl.getById(result ?? id) : (result ?? id);
     }
 
-    updateById(tableName, data, id, full = true) {
+    async updateById(tableName, data, id, full = true) {
         const tbl = this.table(tableName);
         const pk = tbl.pkName || '_id';
-        return this.update(tableName, data, { [pk]: id }, full);
+        return await this.update(tableName, data, { [pk]: id }, full);
     }
 
-    delete(tableName, where) {
+    async delete(tableName, where) {
         const tbl = this.table(tableName);
-        const oldRows = tbl.getAll(where, { full: false });
+        const oldRows = await tbl.getAll(where, { full: false });
 
-        // STRICT DML FOREIGN KEY INTEGRITY CHECK:
-        // Block deleting parent rows if any child table still references them
+        // STRICT DML FOREIGN KEY INTEGRITY CHECK
         if (oldRows.length > 0 && this.schema && typeof this.schema.getReferencingConstraints === 'function') {
-            const refs = this.schema.getReferencingConstraints(tableName);
-            const rawDb = this.db.db || this.db;
+            const refs = await this.schema.getReferencingConstraints(tableName);
             for (const ref of refs) {
                 const targetCol = ref.ref_col || tbl.pkName || '_id';
                 const targetVals = [...new Set(
@@ -331,9 +296,10 @@ class Engine {
 
                 const placeholders = targetVals.map(() => '?').join(', ');
                 try {
-                    const hit = rawDb.prepare(
-                        `SELECT COUNT(*) as c FROM "${ref.table_name}" WHERE "${ref.column_name}" IN (${placeholders})`
-                    ).get(...targetVals);
+                    const hit = await this.core.queryOne(
+                        `SELECT COUNT(*) as c FROM ${this.core.quoteId(ref.table_name)} WHERE ${this.core.quoteId(ref.column_name)} IN (${placeholders})`,
+                        targetVals
+                    );
                     if (hit && hit.c > 0) {
                         const err = new Error(
                             `Cannot delete record from "${tableName}": ${hit.c} linked record(s) exist in "${ref.table_name}" (column: ${ref.column_name}). Delete or update those record(s) in "${ref.table_name}" first.`
@@ -347,18 +313,18 @@ class Engine {
             }
         }
 
-        const needTx = !this.db.inTransaction;
+        const needTx = !this.core.inTransaction;
         try {
-            if (needTx) this.db.prepare('BEGIN IMMEDIATE').run();
-            const count = tbl.delete(where);
+            if (needTx) await this.core.begin();
+            const count = await tbl.delete(where);
             for (const oldRow of oldRows) {
-                this.trigger.execute(tableName, 'DELETE', null, oldRow);
+                await this.trigger.execute(tableName, 'DELETE', null, oldRow);
             }
-            if (needTx) this.db.prepare('COMMIT').run();
+            if (needTx) await this.core.commit();
             return count;
         } catch (err) {
-            if (needTx && this.db.inTransaction) this.db.prepare('ROLLBACK').run();
-            if (err && /FOREIGN KEY constraint failed/i.test(err.message || '')) {
+            if (needTx && this.core.inTransaction) await this.core.rollback();
+            if (err && /FOREIGN KEY constraint failed|a foreign key constraint fails/i.test(err.message || '')) {
                 const fkErr = new Error(
                     `Cannot delete record from "${tableName}": it is still referenced by another table. Delete the referencing record(s) first.`
                 );
@@ -369,25 +335,14 @@ class Engine {
         }
     }
 
-    deleteById(tableName, id) {
+    async deleteById(tableName, id) {
         const tbl = this.table(tableName);
         const pk = tbl.pkName || '_id';
-        return this.delete(tableName, { [pk]: id });
+        return await this.delete(tableName, { [pk]: id });
     }
 
     // ─────────────────────────────────────────────────────────
-    // PROCEDURE — public API, same pattern as table()
-    // Returns cached ProcedureHandle.
-    // Works for both CTE reports and MySQL stored procedures.
-    // Works in SQLite and MySQL mode — same call, same result.
-    //
-    // engine.report is INTERNAL — use procedure() instead
-    //
-    // Usage:
-    //   engine.procedure('monthly_sales').run({ from: '2024-01' })
-    //   engine.procedure('generate_report').run({ year: 2024 })
-    //   engine.procedure('low_stock').getParams()
-    //   engine.procedure('low_stock').getMeta()
+    // PROCEDURE — public API
     // ─────────────────────────────────────────────────────────
 
     procedure(name) {
@@ -395,22 +350,31 @@ class Engine {
     }
 
     // ─────────────────────────────────────────────────────────
-    // PASS-THROUGH QUERIES — no triggers
+    // PASS-THROUGH QUERIES — Uniform Async Footprint
     // ─────────────────────────────────────────────────────────
 
-    getById(tableName, id) { return this.table(tableName).getById(id); }
-    getOne(tableName, where, opts) { return this.table(tableName).getOne(where, opts); }
-    getAll(tableName, where, opts) { return this.table(tableName).getAll(where, opts); }
-    count(tableName, where) { return this.table(tableName).count(where); }
+    async getById(tableName, id) { return await this.table(tableName).getById(id); }
+    async getOne(tableName, where, opts) { return await this.table(tableName).getOne(where, opts); }
+    async getAll(tableName, where, opts) { return await this.table(tableName).getAll(where, opts); }
+    async count(tableName, where) { return await this.table(tableName).count(where); }
+
+    async max(tableName, column) {
+        const qTbl = this.core.quoteId(tableName);
+        const qCol = this.core.quoteId(column);
+        const row = await this.core.queryOne(`SELECT MAX(${qCol}) as last FROM ${qTbl}`);
+        return row?.last ?? 0;
+    }
 
     /**
      * Multi-column search with filtering, sorting, and pagination.
-     * Delegates pure database query generation and execution to sutramCore.
+     * Parameterized SQL delegated purely to Core.
      */
-    search(tableName, query = '', { where = {}, limit = 100, offset = 0, full = true, orderBy = null } = {}) {
+    async search(tableName, query = '', { where = {}, limit = 100, offset = 0, full = true, orderBy = null } = {}) {
         const tbl = this.table(tableName);
         const q = String(query || '').trim();
         const conditions = [];
+        const params = [];
+        const qTbl = this.core.quoteId(tableName);
 
         // 1. Process WHERE filter object or string
         if (typeof where === 'string' && where.trim()) {
@@ -418,26 +382,27 @@ class Engine {
         } else if (where && typeof where === 'object' && Object.keys(where).length > 0) {
             for (const [col, val] of Object.entries(where)) {
                 if (!tbl.columns || !tbl.columns[col]) continue;
+                const colExpr = `${qTbl}.${this.core.quoteId(col)}`;
                 if (Array.isArray(val) && val.length > 0) {
                     const hasBlank = val.includes('__BLANK__') || val.includes('');
                     const nonBlanks = val.filter(v => v !== '__BLANK__' && v !== '');
                     const conds = [];
                     if (nonBlanks.length > 0) {
-                        const formattedVals = nonBlanks.map(v => typeof v === 'string' ? `'${v.replace(/'/g, "''")}'` : v);
-                        conds.push(`\`${col}\` IN (${formattedVals.join(', ')})`);
+                        conds.push(`${colExpr} IN (${nonBlanks.map(() => '?').join(', ')})`);
+                        params.push(...nonBlanks);
                     }
                     if (hasBlank) {
-                        conds.push(`(\`${col}\` IS NULL OR \`${col}\` = '')`);
+                        conds.push(`(${colExpr} IS NULL OR ${colExpr} = '')`);
                     }
                     if (conds.length > 0) {
                         conditions.push(`(${conds.join(' OR ')})`);
                     }
                 } else if (val !== undefined && val !== null && val !== '') {
                     if (val === '__BLANK__') {
-                        conditions.push(`(\`${col}\` IS NULL OR \`${col}\` = '')`);
+                        conditions.push(`(${colExpr} IS NULL OR ${colExpr} = '')`);
                     } else {
-                        const formattedVal = typeof val === 'string' ? `'${val.replace(/'/g, "''")}'` : val;
-                        conditions.push(`\`${col}\` = ${formattedVal}`);
+                        conditions.push(`${colExpr} = ?`);
+                        params.push(val);
                     }
                 }
             }
@@ -455,184 +420,209 @@ class Engine {
                 .map(([col]) => col);
 
             if (searchCols.length > 0) {
-                const escapedQ = q.replace(/'/g, "''");
-                const sConds = searchCols.map(c => `\`${c}\` LIKE '%${escapedQ}%'`);
+                const sConds = searchCols.map(c => {
+                    params.push(`%${q}%`);
+                    return `${qTbl}.${this.core.quoteId(c)} LIKE ?`;
+                });
                 conditions.push(`(${sConds.join(' OR ')})`);
             }
         }
 
-        const combinedWhere = conditions.length > 0 ? conditions.join(' AND ') : {};
+        const combinedWhere = conditions.length > 0
+            ? { __sql: conditions.join(' AND '), __params: params }
+            : {};
 
         let safeOrderBy = orderBy;
         if (safeOrderBy && tbl.columns) {
             const match = String(safeOrderBy).match(/[`"']?([a-zA-Z0-9_]+)[`"']?\s*(ASC|DESC)?/i);
             if (match) {
                 const colName = match[1];
-                if (!tbl.columns[colName]) {
-                    if (tbl.columns[`${colName}_id`]) {
-                        safeOrderBy = `\`${colName}_id\` ${match[2] || 'ASC'}`;
-                    } else {
-                        safeOrderBy = null;
-                    }
+                const dir = (match[2] || 'ASC').toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
+                if (tbl.columns[colName]) {
+                    safeOrderBy = `${this.core.quoteId(colName)} ${dir}`;
+                } else if (tbl.columns[`${colName}_id`]) {
+                    safeOrderBy = `${this.core.quoteId(`${colName}_id`)} ${dir}`;
+                } else {
+                    safeOrderBy = null;
                 }
             }
         }
 
-        const rows = tbl.getAll(combinedWhere, { full, orderBy: safeOrderBy, limit, offset });
-        const total = tbl.count(combinedWhere);
+        const rows = await tbl.getAll(combinedWhere, { full, orderBy: safeOrderBy, limit, offset });
+        const total = await tbl.count(combinedWhere);
 
         return { rows, total, limit, offset };
     }
 
-    /**
-     * Retrieves distinct values and frequency counts for a column.
-     * Delegates pure database query generation and execution to sutramCore.
-     */
-    distinct(tableName, column, { where = {}, limit = null, orderBy = null } = {}) {
+    async distinct(tableName, column, { where = {}, limit = null, orderBy = null } = {}) {
         const tbl = this.table(tableName);
-        return tbl.distinct(column, where, { limit, orderBy });
+        return await tbl.distinct(column, where, { limit, orderBy });
     }
 
     // ─────────────────────────────────────────────────────────
     // IMPORT / EXPORT
-    // importAll / importSchema / importTriggers / importReports
-    //   → only meaningful in managed mode
-    //   → in direct mode: logs warning, skips
-    //
-    // exportAll / exportSchema / exportTriggers / exportReports
-    //   → always available — reads from sys_ in managed mode
-    //   → in direct mode: returns current in-memory state
     // ─────────────────────────────────────────────────────────
 
-    importAll(opts = {}) {
+    async importAll(opts = {}) {
         const { ui, ...rest } = opts;
         this._assertManagedForImport('importAll');
-        this.schema.importAll(rest);
-        if (ui) this.ui.importUi(ui);
+        await this.schema.importAll(rest);
+        if (ui) await this.ui.importUi(ui);
     }
 
-    importSchema(meta) {
+    async importSchema(meta) {
         this._assertManagedForImport('importSchema');
-        return this.schema.importSchema(meta);
+        return await this.schema.importSchema(meta);
     }
 
-    importTriggers(list) {
+    async importTriggers(list) {
         this._assertManagedForImport('importTriggers');
-        return this.schema.importTriggers(list);
+        return await this.schema.importTriggers(list);
     }
 
-    // importUi works in ALL modes — UI config is always in sys_ tables
-    // (sys_table_ui + sys_column_ui always created by sys migrations)
-
-    importReports(list) {
+    async importReports(list) {
         this._assertManagedForImport('importReports');
-        return this.schema.importReports(list);
+        return await this.schema.importReports(list);
     }
 
-    exportAll() { return this.schema.exportAll(); }
-    exportSchema() { return this.schema.exportSchema(); }
-    exportTriggers() { return this.schema.exportTriggers(); }
-    exportReports() { return this.schema.exportReports(); }
+    async exportAll() { return await this.schema.exportAll(); }
+    async exportSchema() { return await this.schema.exportSchema(); }
+    async exportTriggers() { return await this.schema.exportTriggers(); }
+    async exportReports() { return await this.schema.exportReports(); }
 
     // ─────────────────────────────────────────────────────────
-    // TRANSACTIONS
+    // TRANSACTIONS — delegated purely to Core
     // ─────────────────────────────────────────────────────────
 
-    transaction(fn) {
-        if (this._sutram && typeof this._sutram.transaction === 'function') {
-            return this._sutram.transaction(fn);
-        }
-        return this.db.transaction(fn)();
+    async transaction(fn) {
+        return await this.core.transaction(fn);
     }
     async begin() {
-        if (this._sutram && typeof this._sutram.begin === 'function') {
-            return await this._sutram.begin();
-        }
-        if (this.db) this.db.prepare('BEGIN').run();
+        return await this.core.begin();
     }
     async commit() {
-        if (this._sutram && typeof this._sutram.commit === 'function') {
-            return await this._sutram.commit();
-        }
-        if (this.db) this.db.prepare('COMMIT').run();
+        return await this.core.commit();
     }
     async rollback() {
-        if (this._sutram && typeof this._sutram.rollback === 'function') {
-            return await this._sutram.rollback();
-        }
-        if (this.db) this.db.prepare('ROLLBACK').run();
+        return await this.core.rollback();
     }
 
     // ─────────────────────────────────────────────────────────
-    // ZERO-TRACE PURGE & INTROSPECTION
+    // MODULE MIGRATIONS, META STORAGE & INTROSPECTION VIA ENGINE
+    // (Allows modules like sutramExcel to migrate & store metadata
+    //  with zero direct SQLite / MySQL / sutramcore access)
     // ─────────────────────────────────────────────────────────
 
+    async getMeta(key, defaultValue = null) {
+        try {
+            const row = await this.core.queryOne(
+                `SELECT ${this.core.quoteId('value')} as val FROM sys_meta WHERE ${this.core.quoteId('key')} = ?`,
+                [key]
+            );
+            return row ? row.val : defaultValue;
+        } catch {
+            return defaultValue;
+        }
+    }
+
+    async setMeta(key, value) {
+        await this.core.upsert('sys_meta', ['key'], {
+            key: String(key),
+            value: typeof value === 'string' ? value : JSON.stringify(value)
+        });
+        return true;
+    }
+
+    /**
+     * Declarative migration runner for ecosystem modules (e.g. sutramExcel).
+     * Modules declare versioned schema steps; Engine handles version tracking & Core DDL.
+     */
+    async migrateSystemModule(metaKey, versions = []) {
+        if (!metaKey || !Array.isArray(versions) || versions.length === 0) return;
+
+        const currentVersion = parseInt(String(await this.getMeta(metaKey, '0')), 10) || 0;
+        const targetVersion = versions.length;
+        if (currentVersion >= targetVersion) return;
+
+        for (let v = currentVersion; v < targetVersion; v++) {
+            const steps = Array.isArray(versions[v]) ? versions[v] : [versions[v]];
+            for (const step of steps) {
+                if (step.action === 'ensureTable' && step.table) {
+                    await this.schema.ensureSystemTable(step.table);
+                } else if (step.action === 'upsert' && step.table_name && step.data) {
+                    await this.core.upsert(step.table_name, step.conflictCols || [], step.data);
+                } else if (step.action === 'addColumn' && step.table_name && step.column) {
+                    try { await this.core.addColumn(step.table_name, step.column); } catch {}
+                } else if (typeof step === 'string') {
+                    await this.core.run(step);
+                }
+            }
+            await this.setMeta(metaKey, String(v + 1));
+            console.log(`[sutramEngine] ✓ Module "${metaKey}" migration v${v + 1} applied`);
+        }
+
+        await this.rebootstrap();
+    }
+
     async purgeSutram() {
-        if (this._sutram && typeof this._sutram.purgeSutram === 'function') {
-            return await this._sutram.purgeSutram();
-        }
-        if (this.db) {
-            const { SQLiteIntrospector } = require('sutramcore');
-            return SQLiteIntrospector.purgeSutram(this.db);
-        }
-        throw new Error('[sutramEngine] No active database connection to purge.');
+        return await this.core.purgeSutram();
     }
 
     async introspect() {
-        if (this._sutram && typeof this._sutram.introspect === 'function') {
-            return await this._sutram.introspect();
-        }
-        if (this.db) {
-            const { SQLiteIntrospector } = require('sutramcore');
-            return SQLiteIntrospector.introspect(this.db);
-        }
-        return null;
+        return await this.core.introspect();
     }
 
-    // ─────────────────────────────────────────────────────────
-    // UI CONFIG
-    // ─────────────────────────────────────────────────────────
-    // engine.ui.setTableUi(table, opts)    → set table display config
-    // engine.ui.setColumnUi(table, col, opts) → set column display config
-    // engine.ui.getMenu()                  → sidebar menu response
-    // engine.ui.getTableSchema(table)      → form + table builder response
-    //
-    // importAll supports ui:
-    //   engine.importAll({ schema, triggers, reports, ui })
-
-    importUi(uiConfig) {
-        return this.ui.importUi(uiConfig);
+    async getViews() {
+        return await this.core.listViews();
     }
 
-    // ─────────────────────────────────────────────────────────
-    // ROUTER
-    // ─────────────────────────────────────────────────────────
-    // Returns an Express router with all CRUD + _sutram routes.
-    // Works in both direct and managed mode.
-    //
-    // Usage:
-    //   app.use('/api', engine.router());
-    //
-    // Routes:
-    //   GET  /_sutram/menu
-    //   GET  /_sutram/schema/:table
-    //   POST /_sutram/reports/:name/run
-    //   GET    /:table
-    //   GET    /:table/:id
-    //   POST   /:table
-    //   PUT    /:table/:id
-    //   DELETE /:table/:id
-    //   POST   /:table/query
+    async inspectTable(tableName) {
+        return await this.core.inspectTable(tableName);
+    }
+
+    async listPhysicalTables() {
+        return await this.core.listPhysicalTables();
+    }
+
+    async importUi(uiConfig) {
+        return await this.ui.importUi(uiConfig);
+    }
 
     router() {
         return buildRouter(this);
     }
 
     // ─────────────────────────────────────────────────────────
-    // RAW DB ACCESS
+    // RAW QUERY COMPATIBILITY — Always routed through Engine → Core
     // ─────────────────────────────────────────────────────────
 
-    prepare(sql) { return this.db.prepare(sql); }
+    async query(sql, params = []) {
+        return await this.core.query(sql, params);
+    }
+
+    async queryOne(sql, params = []) {
+        return await this.core.queryOne(sql, params);
+    }
+
+    async run(sql, params = []) {
+        return await this.core.run(sql, params);
+    }
+
+    async upsert(tableName, conflictCols = [], data = {}) {
+        return await this.core.upsert(tableName, conflictCols, data);
+    }
+
+    prepare(sql) {
+        if (typeof this.core.prepare === 'function') {
+            return this.core.prepare(sql);
+        }
+        const core = this.core;
+        return {
+            all: (...params) => core.query(sql, params.flat()),
+            get: (...params) => core.queryOne(sql, params.flat()),
+            run: (...params) => core.run(sql, params.flat()),
+        };
+    }
 
     // ─────────────────────────────────────────────────────────
     // PRIVATE

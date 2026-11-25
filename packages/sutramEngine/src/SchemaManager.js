@@ -15,48 +15,79 @@
 
 class SchemaManager {
 
-    constructor(db, rebootstrap) {
-        this.db = db;
+    constructor(db, rebootstrap, engine = null) {
+        this.engine = engine;
+        this.core = engine?.core || null;
+        this.db = db || this.core?.db || null;
         this.rebootstrap = rebootstrap; // callback → Engine.rebootstrap()
-        this.ensureHlColumns();
+        // Only run sync SQLite hl check immediately if constructed standalone with legacy db
+        if (!this.core && this.db && typeof this.db.prepare === 'function') {
+            this.ensureHlColumns();
+        }
+    }
+
+    _getCore() {
+        return this.engine?.core || this.core;
+    }
+
+    _q(id) {
+        const core = this._getCore();
+        return core?.quoteId ? core.quoteId(id) : `"${String(id).replace(/"/g, '""')}"`;
+    }
+
+    _nowStr() {
+        const d = new Date();
+        const pad = n => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+
+    async _query(sql, params = []) {
+        const core = this._getCore();
+        if (core?.query) return await core.query(sql, params);
+        if (this.db?.prepare) return this.db.prepare(sql).all(...(Array.isArray(params) ? params : [params]));
+        return [];
+    }
+
+    async _queryOne(sql, params = []) {
+        const core = this._getCore();
+        if (core?.queryOne) return await core.queryOne(sql, params);
+        if (this.db?.prepare) return this.db.prepare(sql).get(...(Array.isArray(params) ? params : [params])) ?? null;
+        return null;
+    }
+
+    async _run(sql, params = []) {
+        const core = this._getCore();
+        if (core?.run) return await core.run(sql, params);
+        if (this.db?.prepare) {
+            const r = this.db.prepare(sql).run(...(Array.isArray(params) ? params : [params]));
+            return { insertId: r.lastInsertRowid, lastInsertRowid: r.lastInsertRowid, changes: r.changes, affectedRows: r.changes };
+        }
+        return { changes: 0 };
+    }
+
+    async _upsert(tableName, conflictCols, data) {
+        const core = this._getCore();
+        if (core?.upsert) return await core.upsert(tableName, conflictCols, data);
+        throw new Error('[sutramEngine] Core upsert() required');
     }
 
     // ═════════════════════════════════════════════════════════
     // ── IMPORT ALL ────────────────────────────────────────────
     // ═════════════════════════════════════════════════════════
-    //
-    // One call to register everything from your database/ files.
-    //
-    // Usage:
-    //   engine.schema.importAll({
-    //     schema:   require('./schema'),     // tableMeta object
-    //     triggers: require('./triggers'),   // trigger array (optional)
-    //     reports:  require('./reports'),    // report array  (optional)
-    //   });
 
-    importAll({ schema, triggers = [], reports = [] } = {}) {
-        if (schema) this.importSchema(schema);
-        if (triggers?.length) this._importTriggers(triggers);
-        if (reports?.length) this._importReports(reports);
-        // single rebootstrap at the very end
-        this.rebootstrap();
+    async importAll({ schema, triggers = [], reports = [] } = {}) {
+        if (schema) await this.importSchema(schema, '_batch');
+        if (triggers?.length) await this._importTriggers(triggers);
+        if (reports?.length) await this._importReports(reports);
+        await this.rebootstrap();
         console.log('[sutramEngine] ✓ importAll complete');
     }
 
     // ═════════════════════════════════════════════════════════
     // ── IMPORT SCHEMA ─────────────────────────────────────────
     // ═════════════════════════════════════════════════════════
-    //
-    // Accepts sutramCore tableMeta format (defineTable / raw object).
-    // For each table:
-    //   - inserts into sys_table, sys_column, sys_join
-    //   - executes CREATE TABLE IF NOT EXISTS
-    //   - skips if table already in sys_table (idempotent)
-    //
-    // Usage:
-    //   engine.schema.importSchema(require('./schema'));
 
-    importSchema(tableMeta) {
+    async importSchema(tableMeta) {
         if (!tableMeta || typeof tableMeta !== 'object') {
             throw new Error('[sutramEngine] importSchema: tableMeta must be a plain object');
         }
@@ -65,11 +96,12 @@ class SchemaManager {
         let skipped = 0;
 
         for (const [tableName, def] of Object.entries(tableMeta)) {
-            if (tableName.startsWith('sys_')) continue; // never import sys_ tables
+            if (tableName.startsWith('sys_')) continue;
 
-            const exists = this.db.prepare(
-                `SELECT _id FROM sys_table WHERE table_name = ?`
-            ).get(tableName);
+            const exists = await this._queryOne(
+                `SELECT _id FROM sys_table WHERE table_name = ?`,
+                [tableName]
+            );
 
             if (exists) {
                 skipped++;
@@ -79,98 +111,56 @@ class SchemaManager {
             const columns = this._parseColumns(def.columns ?? {});
             const joins = this._parseJoins(def.joins ?? {});
 
-            // createTable handles sys_ insert + DDL — no rebootstrap here
-            // (importAll / importSchema calls it once at the end)
-            this._createTableInternal(tableName, null, null, columns, joins);
+            await this._createTableInternal(tableName, null, null, columns, joins);
             imported++;
         }
 
         console.log(`[sutramEngine] importSchema — imported: ${imported}, skipped: ${skipped}`);
 
-        // rebootstrap only when called standalone (not via importAll)
-        if (arguments[1] !== '_batch') this.rebootstrap();
+        if (arguments[1] !== '_batch') await this.rebootstrap();
     }
 
-    // ═════════════════════════════════════════════════════════
-    // ── IMPORT TRIGGERS ───────────────────────────────────────
-    // ═════════════════════════════════════════════════════════
-    //
-    // Accepts triggers.js array format.
-    // Skips if trigger_name already in sys_trigger.
-    //
-    // Usage:
-    //   engine.schema.importTriggers(require('./triggers'));
-
-    importTriggers(triggers) {
+    async importTriggers(triggers) {
         if (!Array.isArray(triggers)) {
             throw new Error('[sutramEngine] importTriggers: expects an array');
         }
-        this._importTriggers(triggers);
-        this.rebootstrap();
+        await this._importTriggers(triggers);
+        await this.rebootstrap();
     }
 
-    // ═════════════════════════════════════════════════════════
-    // ── IMPORT REPORTS ────────────────────────────────────────
-    // ═════════════════════════════════════════════════════════
-    //
-    // Accepts reports.js array format.
-    // Skips if report_name already in sys_report.
-    //
-    // Usage:
-    //   engine.schema.importReports(require('./reports'));
-
-    importReports(reports) {
+    async importReports(reports) {
         if (!Array.isArray(reports)) {
             throw new Error('[sutramEngine] importReports: expects an array');
         }
-        this._importReports(reports);
-        this.rebootstrap();
+        await this._importReports(reports);
+        await this.rebootstrap();
     }
 
-    // ═════════════════════════════════════════════════════════
-    // ── EXPORT ALL ────────────────────────────────────────────
-    // ═════════════════════════════════════════════════════════
-    //
-    // Returns all three in one call — exact format matching
-    // the input files so it can be roundtripped.
-    //
-    // Usage:
-    //   const { schema, triggers, reports } = engine.schema.exportAll();
-
-    exportAll() {
+    async exportAll() {
         return {
-            schema: this.exportSchema(),
-            triggers: this.exportTriggers(),
-            reports: this.exportReports(),
+            schema: await this.exportSchema(),
+            triggers: await this.exportTriggers(),
+            reports: await this.exportReports(),
         };
     }
 
-    // ═════════════════════════════════════════════════════════
-    // ── EXPORT SCHEMA ─────────────────────────────────────────
-    // ═════════════════════════════════════════════════════════
-    //
-    // Returns tableMeta object — same format as schema.js.
-    // Useful for debugging, or switching back to sutramCore.
-    //
-    // Usage:
-    //   const schema = engine.schema.exportSchema();
-    //   // { product: { columns: {...}, joins: {...} }, ... }
-
-    exportSchema() {
-        const tables = this.db.prepare(
+    async exportSchema() {
+        const tables = await this._query(
             `SELECT * FROM sys_table WHERE active = 1 AND is_system = 0 ORDER BY _id ASC`
-        ).all();
+        );
 
         const result = {};
 
         for (const table of tables) {
-            const cols = this.db.prepare(
-                `SELECT * FROM sys_column WHERE table_id = ? AND active = 1 ORDER BY sort_order ASC`
-            ).all(table._id);
+            const cols = await this._query(
+                `SELECT * FROM sys_column WHERE table_id = ? AND active = 1 ORDER BY sort_order ASC`,
+                [table._id]
+            );
 
-            const joins = this.db.prepare(
-                `SELECT * FROM sys_join WHERE table_id = ? AND active = 1`
-            ).all(table._id);
+            const joins = await this._query(
+                `SELECT * FROM sys_join WHERE table_id = ? AND active = 1`,
+                [table._id]
+            );
 
             result[table.table_name] = {
                 columns: this._exportColumns(cols),
@@ -181,25 +171,17 @@ class SchemaManager {
         return result;
     }
 
-    // ═════════════════════════════════════════════════════════
-    // ── EXPORT TRIGGERS ───────────────────────────────────────
-    // ═════════════════════════════════════════════════════════
-    //
-    // Returns triggers array — same format as triggers.js.
-    //
-    // Usage:
-    //   const triggers = engine.schema.exportTriggers();
-
-    exportTriggers() {
-        const triggers = this.db.prepare(
+    async exportTriggers() {
+        const triggers = await this._query(
             `SELECT * FROM sys_trigger ORDER BY _id ASC`
-        ).all();
+        );
 
-        return triggers.map(t => {
-            const actions = this.db.prepare(
-                `SELECT * FROM sys_trigger_action
-                 WHERE trigger_id = ? ORDER BY sort_order ASC`
-            ).all(t._id);
+        const out = [];
+        for (const t of triggers) {
+            const actions = await this._query(
+                `SELECT * FROM sys_trigger_action WHERE trigger_id = ? ORDER BY sort_order ASC`,
+                [t._id]
+            );
 
             const def = {
                 trigger_name: t.trigger_name,
@@ -209,7 +191,6 @@ class SchemaManager {
                 active: t.active === 1,
             };
 
-            // only include condition fields if not 'always'
             if (t.condition_type !== 'always') {
                 def.condition_type = t.condition_type;
                 if (t.condition_col) def.condition_col = t.condition_col;
@@ -231,23 +212,14 @@ class SchemaManager {
                 return action;
             });
 
-            return def;
-        });
+            out.push(def);
+        }
+        return out;
     }
 
-    // ═════════════════════════════════════════════════════════
-    // ── EXPORT REPORTS ────────────────────────────────────────
-    // ═════════════════════════════════════════════════════════
-    //
-    // Returns reports array — same format as reports.js.
-    //
-    // Usage:
-    //   const reports = engine.schema.exportReports();
-
-    exportReports() {
-        return this.db.prepare(
-            `SELECT * FROM sys_report ORDER BY _id ASC`
-        ).all().map(r => ({
+    async exportReports() {
+        const rows = await this._query(`SELECT * FROM sys_report ORDER BY _id ASC`);
+        return rows.map(r => ({
             report_name: r.report_name,
             label: r.label,
             description: r.description,
@@ -258,68 +230,106 @@ class SchemaManager {
     }
 
     // ═════════════════════════════════════════════════════════
+    // ── ENSURE SYSTEM TABLE (Module Migrations via Engine) ────
+    // ═════════════════════════════════════════════════════════
+
+    async ensureSystemTable(def) {
+        const {
+            table_name,
+            label = null,
+            description = null,
+            columns = [],
+            uniqueKeys = [],
+            timestamps = true,
+            registerInSchema = true,
+        } = def;
+
+        if (!table_name) throw new Error('[sutramEngine] ensureSystemTable: table_name required');
+        const core = this._getCore();
+        if (!core || typeof core.createTable !== 'function') {
+            throw new Error('[sutramEngine] Core createTable() required for ensureSystemTable');
+        }
+
+        await core.createTable({ table_name, columns, uniqueKeys, timestamps });
+
+        if (!registerInSchema) return;
+
+        // Register cleanly in sys_table (is_system = 1) + sys_column so Core ORM / Engine CRUD works on it
+        let tableRow = await this._queryOne(`SELECT _id FROM sys_table WHERE table_name = ?`, [table_name]);
+        if (!tableRow) {
+            const ins = await this._run(
+                `INSERT INTO sys_table (table_name, label, description, is_system, active) VALUES (?, ?, ?, 1, 1)`,
+                [table_name, label ?? table_name, description ?? null]
+            );
+            tableRow = { _id: ins.insertId ?? ins.lastInsertRowid };
+        }
+
+        for (let i = 0; i < columns.length; i++) {
+            const col = columns[i];
+            const existingCol = await this._queryOne(
+                `SELECT _id FROM sys_column WHERE table_id = ? AND column_name = ?`,
+                [tableRow._id, col.column_name]
+            );
+            if (!existingCol) {
+                await this._insertColumn(tableRow._id, col, col.sort_order ?? i);
+            }
+        }
+    }
+
+    // ═════════════════════════════════════════════════════════
     // ── CREATE TABLE ──────────────────────────────────────────
     // ═════════════════════════════════════════════════════════
-    //
-    // Direct create — for SchemaManager.createTable() API.
-    // def: {
-    //   table_name, label?, description?,
-    //   columns: [ { column_name, col_type, ... } ],
-    //   joins?:  [ { join_type, join_key, ... } ]
-    // }
 
-    createTable(def) {
+    async createTable(def) {
         const { table_name, label, description, columns = [], joins = [] } = def;
 
         if (!table_name) throw new Error('[sutramEngine] createTable: table_name required');
         if (columns.length === 0) throw new Error('[sutramEngine] createTable: at least one column required');
-        if (table_name.startsWith('sys_')) {
-            throw new Error(`[sutramEngine] Cannot use "sys_" prefix — reserved for engine`);
+        if (table_name.startsWith('sys_') || table_name.startsWith('xls_')) {
+            throw new Error(`[sutramEngine] Cannot use "sys_" or "xls_" prefix — reserved for engine`);
         }
 
-        this._createTableInternal(table_name, label, description, columns, joins);
-        this.rebootstrap();
+        await this._createTableInternal(table_name, label, description, columns, joins);
+        await this.rebootstrap();
         console.log(`[sutramEngine] ✓ Table "${table_name}" created`);
+        return { created: true, table_name };
     }
 
     // ─────────────────────────────────────────────────────────
     // ADD COLUMN
-    // col: { column_name, col_type, label?, is_required?,
-    //        default_value?, ref_table?, ref_col?, ref_as?, ref_select? }
 
-    addColumn(tableName, col) {
+    async addColumn(tableName, col) {
         if (!tableName || !col?.column_name) {
             throw new Error('[sutramEngine] addColumn: tableName and col.column_name required');
         }
 
-        const tableRow = this._getTable(tableName);
+        const tableRow = await this._getTable(tableName);
+        const maxOrder = (await this._queryOne(
+            `SELECT MAX(sort_order) as m FROM sys_column WHERE table_id = ?`,
+            [tableRow._id]
+        ))?.m ?? -1;
 
-        this.db.transaction(() => {
-            const maxOrder = this.db.prepare(
-                `SELECT MAX(sort_order) as m FROM sys_column WHERE table_id = ?`
-            ).get(tableRow._id)?.m ?? -1;
+        await this._insertColumn(tableRow._id, col, maxOrder + 1);
+        await this._getCore().addColumn(tableName, col);
 
-            this._insertColumn(tableRow._id, col, maxOrder + 1);
-            this.db.prepare(this._buildAlterAddColumn(tableName, col)).run();
-        })();
-
-        this.rebootstrap();
+        await this.rebootstrap();
         console.log(`[sutramEngine] ✓ Column "${col.column_name}" added to "${tableName}"`);
     }
 
     // ─────────────────────────────────────────────────────────
     // DROP COLUMN
 
-    dropColumn(tableName, columnName) {
-        const tableRow = this._getTable(tableName);
-        const colRow = this.db.prepare(
-            `SELECT * FROM sys_column WHERE table_id = ? AND column_name = ?`
-        ).get(tableRow._id, columnName);
+    async dropColumn(tableName, columnName) {
+        const tableRow = await this._getTable(tableName);
+        const colRow = await this._queryOne(
+            `SELECT * FROM sys_column WHERE table_id = ? AND column_name = ?`,
+            [tableRow._id, columnName]
+        );
 
         if (!colRow) throw new Error(`[sutramEngine] Column "${columnName}" not found in "${tableName}"`);
         if (colRow.is_pk) throw new Error(`[sutramEngine] Cannot drop primary key column`);
 
-        const refs = this.getReferencingConstraints(tableName, columnName);
+        const refs = await this.getReferencingConstraints(tableName, columnName);
         if (refs.length > 0) {
             const err = new Error(
                 `Cannot drop column "${tableName}.${columnName}": referenced by ${refs.map(r => `"${r.table_name}.${r.column_name}"`).join(', ')}. Remove referencing foreign key(s) first.`
@@ -328,58 +338,55 @@ class SchemaManager {
             throw err;
         }
 
-        this.db.transaction(() => {
-            this.db.prepare(`DELETE FROM sys_column WHERE _id = ?`).run(colRow._id);
-            this.db.prepare(`ALTER TABLE "${tableName}" DROP COLUMN "${columnName}"`).run();
-        })();
+        await this._run(`DELETE FROM sys_column WHERE _id = ?`, [colRow._id]);
+        await this._getCore().dropColumn(tableName, columnName);
 
-        this.rebootstrap();
+        await this.rebootstrap();
         console.log(`[sutramEngine] ✓ Column "${columnName}" dropped from "${tableName}"`);
     }
 
     // ─────────────────────────────────────────────────────────
     // ADD JOIN
-    // join: { join_type, join_key, child_table, fk_col,
-    //         target_col, as_name, junction_table?, select_cols? }
 
-    addJoin(tableName, join) {
-        const tableRow = this._getTable(tableName);
-        this.db.transaction(() => this._insertJoin(tableRow._id, join))();
-        this.rebootstrap();
+    async addJoin(tableName, join) {
+        const tableRow = await this._getTable(tableName);
+        await this._insertJoin(tableRow._id, join);
+        await this.rebootstrap();
         console.log(`[sutramEngine] ✓ Join "${join.join_key}" added to "${tableName}"`);
     }
 
     // ─────────────────────────────────────────────────────────
     // REMOVE JOIN
 
-    removeJoin(tableName, joinKey) {
-        const tableRow = this._getTable(tableName);
-        const joinRow = this.db.prepare(
-            `SELECT * FROM sys_join WHERE table_id = ? AND join_key = ?`
-        ).get(tableRow._id, joinKey);
+    async removeJoin(tableName, joinKey) {
+        const tableRow = await this._getTable(tableName);
+        const joinRow = await this._queryOne(
+            `SELECT * FROM sys_join WHERE table_id = ? AND join_key = ?`,
+            [tableRow._id, joinKey]
+        );
 
         if (!joinRow) throw new Error(`[sutramEngine] Join "${joinKey}" not found in "${tableName}"`);
 
-        this.db.prepare(`DELETE FROM sys_join WHERE _id = ?`).run(joinRow._id);
-        this.rebootstrap();
+        await this._run(`DELETE FROM sys_join WHERE _id = ?`, [joinRow._id]);
+        await this.rebootstrap();
         console.log(`[sutramEngine] ✓ Join "${joinKey}" removed from "${tableName}"`);
     }
 
     // ─────────────────────────────────────────────────────────
-    // REFERENCING FK CONSTRAINTS CHECK (sys_column + SQLite PRAGMA)
+    // REFERENCING FK CONSTRAINTS CHECK (sys_column + Core FK introspection)
 
-    getReferencingConstraints(tableName, columnName = null) {
+    async getReferencingConstraints(tableName, columnName = null) {
         const seen = new Set();
         const refs = [];
 
         // 1. Metadata check via sys_column
         try {
-            const sysRefs = this.db.prepare(`
+            const sysRefs = await this._query(`
                 SELECT t.table_name, c.column_name, COALESCE(c.ref_col, '_id') as ref_col
                 FROM sys_column c
                 JOIN sys_table t ON t._id = c.table_id
                 WHERE c.ref_table = ? AND c.active = 1 AND t.active = 1 AND t.table_name != ?
-            `).all(tableName, tableName);
+            `, [tableName, tableName]);
 
             for (const r of sysRefs) {
                 if (columnName && r.ref_col !== columnName) continue;
@@ -391,27 +398,20 @@ class SchemaManager {
             }
         } catch {}
 
-        // 2. Physical SQLite DDL check via PRAGMA foreign_key_list across all physical tables
+        // 2. Physical FK introspection via Core
         try {
-            const allPhysical = this.db.prepare(`
-                SELECT name FROM sqlite_master
-                WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'sys_%' AND name != ?
-            `).all(tableName);
-
-            for (const row of allPhysical) {
-                try {
-                    const fkList = this.db.prepare(`PRAGMA foreign_key_list("${row.name}")`).all();
-                    for (const fk of fkList) {
-                        if (fk.table !== tableName) continue;
-                        const targetCol = fk.to || '_id';
-                        if (columnName && targetCol !== columnName) continue;
-                        const key = `${row.name}.${fk.from}->${targetCol}`;
-                        if (!seen.has(key)) {
-                            seen.add(key);
-                            refs.push({ table_name: row.name, column_name: fk.from, ref_col: targetCol });
-                        }
+            const core = this._getCore();
+            if (core?.getForeignKeysTo) {
+                const physFks = await core.getForeignKeysTo(tableName);
+                for (const fk of physFks) {
+                    const targetCol = fk.ref_col || '_id';
+                    if (columnName && targetCol !== columnName) continue;
+                    const key = `${fk.table_name}.${fk.column_name}->${targetCol}`;
+                    if (!seen.has(key)) {
+                        seen.add(key);
+                        refs.push({ table_name: fk.table_name, column_name: fk.column_name, ref_col: targetCol });
                     }
-                } catch {}
+                }
             }
         } catch {}
 
@@ -421,14 +421,14 @@ class SchemaManager {
     // ─────────────────────────────────────────────────────────
     // TABLE IMPACT CHECK (for Edit / Delete safety warnings)
 
-    getTableImpact(tableName) {
-        const tableRow = this._getTable(tableName);
+    async getTableImpact(tableName) {
+        const tableRow = await this._getTable(tableName);
         let rowCount = 0;
         try {
-            rowCount = this.db.prepare(`SELECT COUNT(*) as c FROM "${tableName}"`).get()?.c || 0;
+            rowCount = Number((await this._queryOne(`SELECT COUNT(*) as c FROM ${this._q(tableName)}`))?.c || 0);
         } catch {}
 
-        const referencingTables = this.getReferencingConstraints(tableName);
+        const referencingTables = await this.getReferencingConstraints(tableName);
 
         return {
             table_name: tableName,
@@ -439,37 +439,30 @@ class SchemaManager {
     }
 
     // ─────────────────────────────────────────────────────────
-    // UPDATE TABLE (2-Tier Hybrid Strategy: Fast In-Place vs Atomic Shadow Rebuild)
+    // UPDATE TABLE (Delegates physical DDL mutation to Core)
 
-    updateTable(tableName, def = {}) {
-        const tableRow = this._getTable(tableName);
+    async updateTable(tableName, def = {}) {
+        const tableRow = await this._getTable(tableName);
         if (tableRow.is_system) {
             throw new Error(`[sutramEngine] Cannot edit system table "${tableName}"`);
         }
 
         const { label, description, columns } = def;
-        const existingCols = this.db.prepare(
-            `SELECT * FROM sys_column WHERE table_id = ? AND active = 1 ORDER BY sort_order ASC`
-        ).all(tableRow._id);
+        const existingCols = await this._query(
+            `SELECT * FROM sys_column WHERE table_id = ? AND active = 1 ORDER BY sort_order ASC`,
+            [tableRow._id]
+        );
 
         const existingMap = new Map(existingCols.map(c => [c.column_name, c]));
 
-        // If only table label/description changed (no columns array provided)
+        // If only table label/description changed
         if (!Array.isArray(columns) || columns.length === 0) {
-            const needTx = !this.db.inTransaction;
-            try {
-                if (needTx) this.db.prepare('BEGIN').run();
-                this.db.prepare(`
-                    UPDATE sys_table
-                    SET label = ?, description = ?, updated_at = datetime('now', 'localtime')
-                    WHERE _id = ?
-                `).run(label ?? tableRow.label, description !== undefined ? description : tableRow.description, tableRow._id);
-                if (needTx) this.db.prepare('COMMIT').run();
-            } catch (err) {
-                if (needTx && this.db.inTransaction) this.db.prepare('ROLLBACK').run();
-                throw err;
-            }
-            this.rebootstrap();
+            await this._run(`
+                UPDATE sys_table
+                SET label = ?, description = ?, updated_at = ?
+                WHERE _id = ?
+            `, [label ?? tableRow.label, description !== undefined ? description : tableRow.description, this._nowStr(), tableRow._id]);
+            await this.rebootstrap();
             return { strategy: 'metadata-only', table_name: tableName, columnsCount: existingCols.length };
         }
 
@@ -510,7 +503,6 @@ class SchemaManager {
             });
         }
 
-        // Validate duplicate names
         const seenNames = new Set();
         for (const c of incoming) {
             if (seenNames.has(c.column_name)) {
@@ -519,17 +511,14 @@ class SchemaManager {
             seenNames.add(c.column_name);
         }
 
-        // Inspect physical SQLite columns & indexes
-        const pragmaCols = this.db.prepare(`PRAGMA table_info("${tableName}")`).all();
-        const physicalNames = new Set(pragmaCols.map(p => p.name));
-        const pragmaIndexes = this.db.prepare(`PRAGMA index_list("${tableName}")`).all();
+        const core = this._getCore();
+        const inspected = await core.inspectTable(tableName);
+        const physicalNames = new Set((inspected.columns || []).map(p => p.name));
         const indexedCols = new Set();
-        for (const idx of pragmaIndexes) {
-            const info = this.db.prepare(`PRAGMA index_info("${idx.name}")`).all();
-            for (const ic of info) indexedCols.add(ic.name);
+        for (const idx of (inspected.indexes || [])) {
+            for (const cName of (idx.columns || [])) indexedCols.add(cName);
         }
 
-        // Categorize changes
         const keptOriginalNames = new Set();
         const addedCols = [];
         const renamedCols = [];
@@ -544,7 +533,6 @@ class SchemaManager {
 
             if (!origKey) {
                 addedCols.push(col);
-                // SQLite ADD COLUMN cannot add NOT NULL without default, UNIQUE, or non-constant expression default
                 if (
                     col.is_unique ||
                     col.default_type === 'CURRENT_TIMESTAMP' ||
@@ -558,7 +546,6 @@ class SchemaManager {
                 if (origKey !== col.column_name) {
                     renamedCols.push({ from: origKey, to: col.column_name });
                 }
-                // Check structural changes requiring Tier 2 Shadow Rebuild
                 const prevReq = prev.is_required ? 1 : 0;
                 const nextReq = col.is_required ? 1 : 0;
                 const prevDef = prev.default_value ?? null;
@@ -586,7 +573,7 @@ class SchemaManager {
         );
 
         for (const rc of removedCols) {
-            const colRefs = this.getReferencingConstraints(tableName, rc.column_name);
+            const colRefs = await this.getReferencingConstraints(tableName, rc.column_name);
             if (colRefs.length > 0) {
                 const err = new Error(
                     `Cannot remove column "${tableName}.${rc.column_name}": it is referenced by ${colRefs.map(r => `"${r.table_name}.${r.column_name}"`).join(', ')}. Delete or update the referencing table(s) first.`
@@ -599,196 +586,37 @@ class SchemaManager {
             }
         }
 
-        let strategy = 'in-place';
+        const alterRes = await core.alterTable(tableName, {
+            incoming,
+            addedCols,
+            removedCols,
+            renamedCols,
+            existingMap,
+            needsRebuild,
+            physicalNames
+        });
 
-        if (!needsRebuild) {
-            // ── TIER 1: Fast In-Place Alteration ──────────────────
-            const needTx = !this.db.inTransaction;
-            try {
-                if (needTx) this.db.prepare('BEGIN IMMEDIATE').run();
+        await this._run(`
+            UPDATE sys_table
+            SET label = ?, description = ?, updated_at = ?
+            WHERE _id = ?
+        `, [label ?? tableRow.label, description !== undefined ? description : tableRow.description, this._nowStr(), tableRow._id]);
 
-                this.db.prepare(`
-                    UPDATE sys_table
-                    SET label = ?, description = ?, updated_at = datetime('now', 'localtime')
-                    WHERE _id = ?
-                `).run(label ?? tableRow.label, description !== undefined ? description : tableRow.description, tableRow._id);
-
-                for (const ren of renamedCols) {
-                    if (physicalNames.has(ren.from)) {
-                        this.db.prepare(`ALTER TABLE "${tableName}" RENAME COLUMN "${ren.from}" TO "${ren.to}"`).run();
-                        physicalNames.delete(ren.from);
-                        physicalNames.add(ren.to);
-                    }
-                    // Update any incoming FKs referencing the renamed column
-                    this.db.prepare(`
-                        UPDATE sys_column SET ref_col = ? WHERE ref_table = ? AND ref_col = ?
-                    `).run(ren.to, tableName, ren.from);
-                }
-
-                for (const rc of removedCols) {
-                    if (physicalNames.has(rc.column_name)) {
-                        this.db.prepare(`ALTER TABLE "${tableName}" DROP COLUMN "${rc.column_name}"`).run();
-                        physicalNames.delete(rc.column_name);
-                    }
-                }
-
-                for (const ac of addedCols) {
-                    if (!physicalNames.has(ac.column_name)) {
-                        this.db.prepare(this._buildAlterAddColumn(tableName, ac)).run();
-                        physicalNames.add(ac.column_name);
-                    }
-                }
-
-                // Refresh sys_column cleanly
-                this.db.prepare(`DELETE FROM sys_column WHERE table_id = ?`).run(tableRow._id);
-                for (let i = 0; i < incoming.length; i++) {
-                    this._insertColumn(tableRow._id, incoming[i], i);
-                }
-
-                // Create requested indexes on new columns
-                for (const col of incoming) {
-                    if (col.has_index && col.column_name !== '_id') {
-                        const idxName = `idx_${tableName}_${col.column_name}`;
-                        this.db.prepare(`CREATE INDEX IF NOT EXISTS "${idxName}" ON "${tableName}"("${col.column_name}")`).run();
-                    }
-                }
-
-                if (needTx) this.db.prepare('COMMIT').run();
-            } catch (err) {
-                if (needTx && this.db.inTransaction) this.db.prepare('ROLLBACK').run();
-                throw err;
-            }
-        } else {
-            // ── TIER 2: Atomic Shadow-Table Rebuild ───────────────
-            strategy = 'rebuild';
-            const shadowName = `__sutram_rebuild_${tableName}_${Date.now()}`;
-            const oldCount = this.db.prepare(`SELECT COUNT(*) as c FROM "${tableName}"`).get()?.c || 0;
-
-            this.db.pragma('foreign_keys = OFF');
-            const needTx = !this.db.inTransaction;
-            try {
-                if (needTx) this.db.prepare('BEGIN IMMEDIATE').run();
-
-                // 1. Create shadow table with updated schema
-                this.db.prepare(this._buildCreateSQL(shadowName, incoming)).run();
-
-                // 2. Map & copy all existing rows with safe COALESCE / updated-default fallback
-                const destCols = [];
-                const selectExprs = [];
-                const toDefaultExpr = (col) => {
-                    if (col.default_type === 'CURRENT_TIMESTAMP') {
-                        return `datetime('now', 'localtime')`;
-                    }
-                    if (isNumericAffinity(col.col_type)) {
-                        return (col.default_value !== undefined && col.default_value !== null && String(col.default_value).trim() !== '' && !isNaN(Number(col.default_value)))
-                            ? String(Number(col.default_value))
-                            : '0';
-                    }
-                    return `'${String(col.default_value ?? '').replace(/'/g, "''")}'`;
-                };
-
-                for (const col of incoming) {
-                    const srcName = col.original_name && physicalNames.has(col.original_name)
-                        ? col.original_name
-                        : (physicalNames.has(col.column_name) ? col.column_name : null);
-
-                    const origMeta = srcName ? existingMap.get(srcName) : null;
-                    const prevDefNorm = origMeta?.default_value !== undefined && origMeta?.default_value !== null && String(origMeta.default_value).trim() !== ''
-                        ? String(origMeta.default_value) : null;
-                    const nextDefNorm = col.default_value !== undefined && col.default_value !== null && String(col.default_value).trim() !== ''
-                        ? String(col.default_value) : null;
-                    const hasExplicitNewDefault = (nextDefNorm !== null || col.default_type === 'CURRENT_TIMESTAMP') && nextDefNorm !== prevDefNorm;
-
-                    if (srcName) {
-                        destCols.push(`"${col.column_name}"`);
-                        if ((col.is_required && !col.is_pk) || (hasExplicitNewDefault && !col.is_pk)) {
-                            const fallback = toDefaultExpr(col);
-                            if (isNumericAffinity(col.col_type)) {
-                                selectExprs.push(`COALESCE("${srcName}", ${fallback})`);
-                            } else {
-                                selectExprs.push(`CASE WHEN "${srcName}" IS NULL OR "${srcName}" = '' THEN ${fallback} ELSE "${srcName}" END`);
-                            }
-                        } else {
-                            selectExprs.push(`"${srcName}"`);
-                        }
-                    } else if (!col.is_pk && (col.is_required || nextDefNorm !== null || col.default_type === 'CURRENT_TIMESTAMP')) {
-                        // Brand-new column with NOT NULL or an explicit default value: populate all existing rows immediately
-                        destCols.push(`"${col.column_name}"`);
-                        selectExprs.push(toDefaultExpr(col));
-                    }
-                }
-
-                if (physicalNames.has('created_at')) {
-                    destCols.push(`"created_at"`);
-                    selectExprs.push(`"created_at"`);
-                }
-                if (physicalNames.has('updated_at')) {
-                    destCols.push(`"updated_at"`);
-                    selectExprs.push(`"updated_at"`);
-                }
-
-                if (oldCount > 0 && destCols.length > 0) {
-                    this.db.prepare(
-                        `INSERT INTO "${shadowName}" (${destCols.join(', ')}) SELECT ${selectExprs.join(', ')} FROM "${tableName}"`
-                    ).run();
-                }
-
-                // 3. Verify row count strictly matches (zero data loss check)
-                const newCount = this.db.prepare(`SELECT COUNT(*) as c FROM "${shadowName}"`).get()?.c || 0;
-                if (newCount !== oldCount) {
-                    throw new Error(`[sutramEngine] Shadow rebuild row count mismatch (${newCount} !== ${oldCount}) — rolled back safely.`);
-                }
-
-                // 4. Swap tables
-                this.db.prepare(`DROP TABLE "${tableName}"`).run();
-                this.db.prepare(`ALTER TABLE "${shadowName}" RENAME TO "${tableName}"`).run();
-
-                // 5. Recreate custom indexes
-                for (const col of incoming) {
-                    if (col.has_index && col.column_name !== '_id') {
-                        const idxName = `idx_${tableName}_${col.column_name}`;
-                        this.db.prepare(`CREATE INDEX IF NOT EXISTS "${idxName}" ON "${tableName}"("${col.column_name}")`).run();
-                    }
-                }
-
-                // 6. Update sys_table & sys_column metadata
-                this.db.prepare(`
-                    UPDATE sys_table
-                    SET label = ?, description = ?, updated_at = datetime('now', 'localtime')
-                    WHERE _id = ?
-                `).run(label ?? tableRow.label, description !== undefined ? description : tableRow.description, tableRow._id);
-
-                for (const ren of renamedCols) {
-                    this.db.prepare(`
-                        UPDATE sys_column SET ref_col = ? WHERE ref_table = ? AND ref_col = ?
-                    `).run(ren.to, tableName, ren.from);
-                }
-
-                this.db.prepare(`DELETE FROM sys_column WHERE table_id = ?`).run(tableRow._id);
-                for (let i = 0; i < incoming.length; i++) {
-                    this._insertColumn(tableRow._id, incoming[i], i);
-                }
-
-                // 7. Verify FK integrity on rebuilt table
-                const fkViolations = this.db.prepare(`PRAGMA foreign_key_check("${tableName}")`).all();
-                if (fkViolations.length > 0) {
-                    throw new Error(`[sutramEngine] Foreign key check failed on "${tableName}" (${fkViolations.length} violation(s)) — rolled back safely.`);
-                }
-
-                if (needTx) this.db.prepare('COMMIT').run();
-            } catch (err) {
-                if (needTx && this.db.inTransaction) this.db.prepare('ROLLBACK').run();
-                try { this.db.prepare(`DROP TABLE IF EXISTS "${shadowName}"`).run(); } catch {}
-                throw err;
-            } finally {
-                this.db.pragma('foreign_keys = ON');
-            }
+        for (const ren of renamedCols) {
+            await this._run(`
+                UPDATE sys_column SET ref_col = ? WHERE ref_table = ? AND ref_col = ?
+            `, [ren.to, tableName, ren.from]);
         }
 
-        this.rebootstrap();
-        console.log(`[sutramEngine] ✓ Table "${tableName}" updated via ${strategy} (${incoming.length} columns)`);
+        await this._run(`DELETE FROM sys_column WHERE table_id = ?`, [tableRow._id]);
+        for (let i = 0; i < incoming.length; i++) {
+            await this._insertColumn(tableRow._id, incoming[i], i);
+        }
+
+        await this.rebootstrap();
+        console.log(`[sutramEngine] ✓ Table "${tableName}" updated via ${alterRes.strategy} (${incoming.length} columns)`);
         return {
-            strategy,
+            strategy: alterRes.strategy,
             table_name: tableName,
             label: label ?? tableRow.label,
             columnsCount: incoming.length,
@@ -801,12 +629,11 @@ class SchemaManager {
     // ─────────────────────────────────────────────────────────
     // DROP TABLE (Strictly enforces Foreign Key Integrity — DDL)
 
-    dropTable(tableName) {
-        const tableRow = this._getTable(tableName);
+    async dropTable(tableName) {
+        const tableRow = await this._getTable(tableName);
         if (tableRow.is_system) throw new Error(`[sutramEngine] Cannot drop system table "${tableName}"`);
 
-        // STRICT DDL FK CHECK: Cannot delete a source/parent table while any child table references it
-        const refs = this.getReferencingConstraints(tableName);
+        const refs = await this.getReferencingConstraints(tableName);
         if (refs.length > 0) {
             const refList = refs.map(r => `"${r.table_name}" (column: ${r.column_name})`).join(', ');
             const err = new Error(
@@ -816,45 +643,34 @@ class SchemaManager {
             throw err;
         }
 
-        const needTx = !this.db.inTransaction;
-        try {
-            if (needTx) this.db.prepare('BEGIN IMMEDIATE').run();
-            // Clean up auxiliary sys_ metadata tables if present
-            try { this.db.prepare(`DELETE FROM sys_user_rights WHERE table_name = ?`).run(tableName); } catch {}
-            try { this.db.prepare(`DELETE FROM sys_column_security WHERE table_name = ?`).run(tableName); } catch {}
-            try { this.db.prepare(`DELETE FROM sys_ui_table WHERE table_name = ?`).run(tableName); } catch {}
-            try { this.db.prepare(`DELETE FROM sys_ui_column WHERE table_name = ?`).run(tableName); } catch {}
-            this.db.prepare(`DELETE FROM sys_column WHERE table_id = ?`).run(tableRow._id);
-            this.db.prepare(`DELETE FROM sys_join WHERE table_id = ?`).run(tableRow._id);
-            this.db.prepare(`DELETE FROM sys_table WHERE _id = ?`).run(tableRow._id);
-            this.db.prepare(`DROP TABLE IF EXISTS "${tableName}"`).run();
-            if (needTx) this.db.prepare('COMMIT').run();
-        } catch (err) {
-            if (needTx && this.db.inTransaction) this.db.prepare('ROLLBACK').run();
-            throw err;
-        }
+        try { await this._run(`DELETE FROM sys_user_rights WHERE table_name = ?`, [tableName]); } catch {}
+        try { await this._run(`DELETE FROM sys_column_security WHERE table_name = ?`, [tableName]); } catch {}
+        await this._run(`DELETE FROM sys_column WHERE table_id = ?`, [tableRow._id]);
+        await this._run(`DELETE FROM sys_join WHERE table_id = ?`, [tableRow._id]);
+        await this._run(`DELETE FROM sys_table WHERE _id = ?`, [tableRow._id]);
+        await this._getCore().dropTable(tableName);
 
-        this.rebootstrap();
+        await this.rebootstrap();
         console.log(`[sutramEngine] ✓ Table "${tableName}" dropped`);
     }
 
     // ─────────────────────────────────────────────────────────
     // LIST
 
-    getTables() {
-        return this.db.prepare(
-            `SELECT * FROM sys_table WHERE active = 1 ORDER BY _id ASC`
-        ).all();
+    async getTables() {
+        return await this._query(`SELECT * FROM sys_table WHERE active = 1 ORDER BY _id ASC`);
     }
 
-    getTableDetail(tableName) {
-        const tableRow = this._getTable(tableName);
-        const columns = this.db.prepare(
-            `SELECT * FROM sys_column WHERE table_id = ? AND active = 1 ORDER BY sort_order ASC`
-        ).all(tableRow._id);
-        const joins = this.db.prepare(
-            `SELECT * FROM sys_join WHERE table_id = ? AND active = 1`
-        ).all(tableRow._id);
+    async getTableDetail(tableName) {
+        const tableRow = await this._getTable(tableName);
+        const columns = await this._query(
+            `SELECT * FROM sys_column WHERE table_id = ? AND active = 1 ORDER BY sort_order ASC`,
+            [tableRow._id]
+        );
+        const joins = await this._query(
+            `SELECT * FROM sys_join WHERE table_id = ? AND active = 1`,
+            [tableRow._id]
+        );
         return { ...tableRow, columns, joins };
     }
 
@@ -862,7 +678,7 @@ class SchemaManager {
     // ── PRIVATE — IMPORT HELPERS ──────────────────────────────
     // ═════════════════════════════════════════════════════════
 
-    _importTriggers(triggers) {
+    async _importTriggers(triggers) {
         let imported = 0;
         let skipped = 0;
 
@@ -872,49 +688,48 @@ class SchemaManager {
                 continue;
             }
 
-            const exists = this.db.prepare(
-                `SELECT _id FROM sys_trigger WHERE trigger_name = ?`
-            ).get(def.trigger_name);
+            const exists = await this._queryOne(
+                `SELECT _id FROM sys_trigger WHERE trigger_name = ?`,
+                [def.trigger_name]
+            );
 
             if (exists) { skipped++; continue; }
 
-            this.db.transaction(() => {
-                const res = this.db.prepare(`
-                    INSERT INTO sys_trigger
-                      (trigger_name, label, source_table, event,
-                       condition_type, condition_col, condition_value, condition_sql)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                `).run(
-                    def.trigger_name,
-                    def.label ?? def.trigger_name,
-                    def.source_table,
-                    def.event.toUpperCase(),
-                    def.condition_type ?? 'always',
-                    def.condition_col ?? null,
-                    def.condition_value ?? null,
-                    def.condition_sql ?? null,
-                );
+            const res = await this._run(`
+                INSERT INTO sys_trigger
+                  (trigger_name, label, source_table, event,
+                   condition_type, condition_col, condition_value, condition_sql)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `, [
+                def.trigger_name,
+                def.label ?? def.trigger_name,
+                def.source_table,
+                def.event.toUpperCase(),
+                def.condition_type ?? 'always',
+                def.condition_col ?? null,
+                def.condition_value ?? null,
+                def.condition_sql ?? null,
+            ]);
 
-                const triggerId = res.lastInsertRowid;
+            const triggerId = res.insertId ?? res.lastInsertRowid;
 
-                for (let i = 0; i < (def.actions ?? []).length; i++) {
-                    const a = def.actions[i];
-                    this.db.prepare(`
-                        INSERT INTO sys_trigger_action
-                          (trigger_id, sort_order, action_type, target_table,
-                           field_map, condition, raw_sql)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    `).run(
-                        triggerId,
-                        a.sort_order ?? i,
-                        a.action_type,
-                        a.target_table ?? null,
-                        a.field_map ? JSON.stringify(a.field_map) : '{}',
-                        a.condition ?? null,
-                        a.raw_sql ?? null,
-                    );
-                }
-            })();
+            for (let i = 0; i < (def.actions ?? []).length; i++) {
+                const a = def.actions[i];
+                await this._run(`
+                    INSERT INTO sys_trigger_action
+                      (trigger_id, sort_order, action_type, target_table,
+                       field_map, ${this._q('condition')}, raw_sql)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                `, [
+                    triggerId,
+                    a.sort_order ?? i,
+                    a.action_type,
+                    a.target_table ?? null,
+                    a.field_map ? JSON.stringify(a.field_map) : '{}',
+                    a.condition ?? null,
+                    a.raw_sql ?? null,
+                ]);
+            }
 
             imported++;
         }
@@ -922,7 +737,7 @@ class SchemaManager {
         console.log(`[sutramEngine] importTriggers — imported: ${imported}, skipped: ${skipped}`);
     }
 
-    _importReports(reports) {
+    async _importReports(reports) {
         let imported = 0;
         let skipped = 0;
 
@@ -932,22 +747,23 @@ class SchemaManager {
                 continue;
             }
 
-            const exists = this.db.prepare(
-                `SELECT _id FROM sys_report WHERE report_name = ?`
-            ).get(def.report_name);
+            const exists = await this._queryOne(
+                `SELECT _id FROM sys_report WHERE report_name = ?`,
+                [def.report_name]
+            );
 
             if (exists) { skipped++; continue; }
 
-            this.db.prepare(`
+            await this._run(`
                 INSERT INTO sys_report (report_name, label, description, cte_sql, params)
                 VALUES (?, ?, ?, ?, ?)
-            `).run(
+            `, [
                 def.report_name,
                 def.label ?? def.report_name,
                 def.description ?? null,
                 def.cte_sql,
                 JSON.stringify(def.params ?? []),
-            );
+            ]);
 
             imported++;
         }
@@ -1063,35 +879,55 @@ class SchemaManager {
     // ── PRIVATE — CORE DDL ────────────────────────────────────
     // ═════════════════════════════════════════════════════════
 
-    ensureHlColumns() {
-        if (!this.db || typeof this.db.prepare !== 'function') return;
+    async ensureHlColumns() {
+        const core = this._getCore();
+        if (!core) return;
         try {
-            const tables = this.db.prepare(`SELECT _id, table_name FROM sys_table WHERE is_system = 0 AND active = 1`).all();
+            const tables = await this._query(`SELECT _id, table_name FROM sys_table WHERE is_system = 0 AND active = 1`);
             for (const t of tables) {
-                const cols = this.db.prepare(`PRAGMA table_info("${t.table_name}")`).all();
-                if (!cols.some(c => c.name === 'hl')) {
+                const info = await core.inspectTable(t.table_name);
+                if (!info.columns.some(c => c.name === 'hl')) {
                     try {
-                        this.db.prepare(`ALTER TABLE "${t.table_name}" ADD COLUMN "hl" INTEGER DEFAULT 0`).run();
+                        await core.addColumn(t.table_name, {
+                            column_name: 'hl',
+                            col_type: 'number',
+                            sql_type: 'TINYINT',
+                            default_value: '0'
+                        });
                     } catch {}
                 }
-                const sysCol = this.db.prepare(`SELECT _id FROM sys_column WHERE table_id = ? AND column_name = 'hl'`).get(t._id);
+                const sysCol = await this._queryOne(
+                    `SELECT _id FROM sys_column WHERE table_id = ? AND column_name = 'hl'`,
+                    [t._id]
+                );
                 if (!sysCol) {
-                    const maxOrder = this.db.prepare(`SELECT MAX(sort_order) as m FROM sys_column WHERE table_id = ?`).get(t._id)?.m ?? 99;
-                    this.db.prepare(`
-                        INSERT OR IGNORE INTO sys_column (table_id, column_name, label, col_type, is_required, default_value, is_pk, sort_order)
-                        VALUES (?, 'hl', 'Highlight Flag', 'number', 0, '0', 0, ?)
-                    `).run(t._id, maxOrder + 1);
+                    const maxOrder = (await this._queryOne(
+                        `SELECT MAX(sort_order) as m FROM sys_column WHERE table_id = ?`,
+                        [t._id]
+                    ))?.m ?? 99;
+                    await this._upsert('sys_column', ['table_id', 'column_name'], {
+                        table_id: t._id,
+                        column_name: 'hl',
+                        label: 'Highlight Flag',
+                        col_type: 'number',
+                        is_required: 0,
+                        default_value: '0',
+                        is_pk: 0,
+                        sort_order: maxOrder + 1
+                    });
                 }
             }
-            // Ensure _id is never marked as is_required in sys_column so insert never demands it
             try {
-                this.db.prepare(`UPDATE sys_column SET is_required = 0 WHERE column_name = '_id'`).run();
+                await this._run(`UPDATE sys_column SET is_required = 0 WHERE column_name = '_id'`);
             } catch {}
         } catch {}
     }
 
     // Internal create — no rebootstrap (caller decides when)
-    _createTableInternal(tableName, label, description, columns, joins) {
+    async _createTableInternal(tableName, label, description, columns, joins) {
+        const core = this._getCore();
+        if (!core) throw new Error('[sutramEngine] Core instance required to create tables');
+
         // Enforce _id as the single compulsory auto-increment primary key
         const pkCol = (columns || []).find(c => c.is_pk || c.column_name === '_id');
         const customCols = (columns || []).filter(c => !c.is_pk && c.column_name !== '_id' && c.column_name !== 'id' && c.column_name !== 'hl');
@@ -1120,80 +956,23 @@ class SchemaManager {
             sort_order: allColumns.length
         });
 
-        // ── MySQL Async Execution Path ────────────────────────
-        if (this.engine?._dialect === 'mysql' && this.engine._adapter) {
-            const adapter = this.engine._adapter;
-            return (async () => {
-                const tableRes = await adapter.run(`
-                    INSERT INTO sys_table (table_name, label, description)
-                    VALUES (?, ?, ?)
-                `, [tableName, label ?? tableName, description ?? null]);
-                const tableId = tableRes.insertId;
+        const tableRes = await this._run(`
+            INSERT INTO sys_table (table_name, label, description)
+            VALUES (?, ?, ?)
+        `, [tableName, label ?? tableName, description ?? null]);
 
-                for (let i = 0; i < allColumns.length; i++) {
-                    const col = allColumns[i];
-                    const normalizedType = this._normalizeColType(col);
-                    const refSelectVal = col.ref_select ? (typeof col.ref_select === 'object' ? JSON.stringify(col.ref_select) : String(col.ref_select)) : null;
-                    await adapter.run(`
-                        INSERT INTO sys_column
-                          (table_id, column_name, label, col_type, is_required, default_value,
-                           is_pk, ref_table, ref_col, ref_as, ref_select, sort_order)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    `, [tableId, col.column_name, col.label ?? col.column_name, normalizedType, col.is_required ? 1 : 0,
-                        col.default_value !== undefined && col.default_value !== null ? String(col.default_value) : null,
-                        col.is_pk ? 1 : 0, col.ref_table ?? null, col.ref_col ?? null, col.ref_as ?? null, refSelectVal, col.sort_order ?? i]);
-                }
+        const tableId = tableRes.insertId ?? tableRes.lastInsertRowid;
 
-                for (const join of (joins || [])) {
-                    await adapter.run(`
-                        INSERT INTO sys_join
-                          (table_id, join_type, join_key, child_table, junction_table,
-                           fk_col, target_col, as_name, select_cols)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    `, [tableId, join.join_type, join.join_key, join.child_table, join.junction_table ?? null,
-                        join.fk_col, join.target_col, join.as_name ?? join.join_key, join.select_cols ?? '["*"]']);
-                }
-
-                await adapter.run(this._buildCreateSQL(tableName, allColumns));
-
-                for (const col of allColumns) {
-                    if (col.has_index && col.column_name !== '_id') {
-                        const idxName = `idx_${tableName}_${col.column_name}`;
-                        try {
-                            await adapter.run(`CREATE INDEX \`${idxName}\` ON \`${tableName}\`(\`${col.column_name}\`)`);
-                        } catch {}
-                    }
-                }
-            })();
+        for (let i = 0; i < allColumns.length; i++) {
+            await this._insertColumn(tableId, allColumns[i], allColumns[i].sort_order ?? i);
         }
 
-        this.db.transaction(() => {
-            const tableRes = this.db.prepare(`
-                INSERT INTO sys_table (table_name, label, description)
-                VALUES (?, ?, ?)
-            `).run(tableName, label ?? tableName, description ?? null);
+        for (const join of (joins || [])) {
+            await this._insertJoin(tableId, join);
+        }
 
-            const tableId = tableRes.lastInsertRowid;
-
-            for (let i = 0; i < allColumns.length; i++) {
-                this._insertColumn(tableId, allColumns[i], allColumns[i].sort_order ?? i);
-            }
-
-            for (const join of (joins || [])) {
-                this._insertJoin(tableId, join);
-            }
-
-            // build + run CREATE TABLE
-            this.db.prepare(this._buildCreateSQL(tableName, allColumns)).run();
-
-            // build + run custom INDEXES if requested
-            for (const col of allColumns) {
-                if (col.has_index && col.column_name !== '_id') {
-                    const idxName = `idx_${tableName}_${col.column_name}`;
-                    this.db.prepare(`CREATE INDEX IF NOT EXISTS "${idxName}" ON "${tableName}"("${col.column_name}")`).run();
-                }
-            }
-        })();
+        // Delegate physical table + index DDL purely to Core
+        await core.createTable({ table_name: tableName, columns: allColumns });
     }
 
     _normalizeColType(col) {
@@ -1215,19 +994,19 @@ class SchemaManager {
         return 'string';
     }
 
-    _insertColumn(tableId, col, sortOrder) {
+    async _insertColumn(tableId, col, sortOrder) {
         const refSelectVal = Array.isArray(col.ref_select)
             ? JSON.stringify(col.ref_select)
             : (col.ref_select ? String(col.ref_select) : null);
 
         const normalizedType = this._normalizeColType(col);
 
-        this.db.prepare(`
+        await this._run(`
             INSERT INTO sys_column
               (table_id, column_name, label, col_type, is_required, default_value,
                is_pk, ref_table, ref_col, ref_as, ref_select, sort_order)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
+        `, [
             tableId,
             col.column_name,
             col.label ?? col.column_name,
@@ -1240,10 +1019,10 @@ class SchemaManager {
             col.ref_as ?? null,
             refSelectVal,
             sortOrder,
-        );
+        ]);
     }
 
-    _insertJoin(tableId, join) {
+    async _insertJoin(tableId, join) {
         if (!join.join_type || !join.join_key || !join.child_table) {
             throw new Error('[sutramEngine] join requires: join_type, join_key, child_table');
         }
@@ -1251,12 +1030,12 @@ class SchemaManager {
             throw new Error('[sutramEngine] manyToMany join requires junction_table');
         }
 
-        this.db.prepare(`
+        await this._run(`
             INSERT INTO sys_join
               (table_id, join_type, join_key, child_table, junction_table,
                fk_col, target_col, as_name, select_cols)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
+        `, [
             tableId,
             join.join_type,
             join.join_key,
@@ -1266,124 +1045,22 @@ class SchemaManager {
             join.target_col,
             join.as_name ?? join.join_key,
             join.select_cols ?? '["*"]',
-        );
+        ]);
     }
 
     _buildCreateSQL(tableName, columns) {
-        const isMySQL = this.engine?._dialect === 'mysql';
-        const q = isMySQL ? '`' : '"';
-        const parts = [];
-
-        for (const col of columns) {
-            if (col.is_pk || col.column_name === '_id') {
-                parts.push(isMySQL ? '`_id` INT AUTO_INCREMENT PRIMARY KEY' : '"_id" INTEGER PRIMARY KEY AUTOINCREMENT');
-                continue;
-            }
-
-            let colDef = `${q}${col.column_name}${q}`;
-
-            if (col.sql_type) {
-                const upperSql = String(col.sql_type).toUpperCase();
-                if (upperSql === 'PASSWORD') {
-                    colDef += ` VARCHAR(${col.length_precision || 255})`;
-                } else if (upperSql === 'FK') {
-                    colDef += isMySQL ? ' INT' : ' INTEGER';
-                } else if (col.length_precision && ['VARCHAR', 'CHAR', 'DECIMAL', 'NUMERIC', 'FLOAT'].includes(upperSql)) {
-                    colDef += ` ${upperSql}(${col.length_precision})`;
-                } else if (upperSql === 'ENUM' && col.length_precision) {
-                    colDef += isMySQL ? ` ENUM(${col.length_precision})` : ` TEXT CHECK("${col.column_name}" IN (${col.length_precision}))`;
-                } else {
-                    colDef += ` ${upperSql}`;
-                }
-            } else {
-                // 100% Backward compatibility for legacy callers without sql_type
-                switch (col.col_type) {
-                    case 'number': colDef += isMySQL ? ' DECIMAL(15,2)' : ' DECIMAL(10,2)'; break;
-                    case 'boolean': colDef += isMySQL ? ' TINYINT(1)' : ' TINYINT'; break;
-                    case 'date': colDef += ' DATE'; break;
-                    case 'datetime': colDef += ' DATETIME'; break;
-                    case 'json': colDef += isMySQL ? ' JSON' : ' TEXT'; break;
-                    case 'password': colDef += ` VARCHAR(${col.length_precision || 255})`; break;
-                    default: colDef += isMySQL ? ' VARCHAR(255)' : ' TEXT';
-                }
-            }
-
-            if (col.is_required) colDef += ' NOT NULL';
-            if (col.is_unique) colDef += ' UNIQUE';
-
-            if (col.default_type === 'CURRENT_TIMESTAMP') {
-                colDef += isMySQL ? ' DEFAULT CURRENT_TIMESTAMP' : ` DEFAULT (datetime('now', 'localtime'))`;
-            } else if (col.default_type === 'NULL') {
-                colDef += ` DEFAULT NULL`;
-            } else if (col.default_value !== undefined && col.default_value !== null && String(col.default_value).trim() !== '') {
-                const isNumeric = ['number', 'int', 'integer', 'decimal', 'boolean', 'tinyint'].includes(String(col.sql_type || col.col_type).toLowerCase());
-                const dv = isNumeric ? col.default_value : `'${col.default_value}'`;
-                colDef += ` DEFAULT ${dv}`;
-            }
-
-            if (col.ref_table && col.ref_col) {
-                colDef += ` REFERENCES ${q}${col.ref_table}${q}(${q}${col.ref_col}${q}) ON DELETE ${col.on_delete || 'RESTRICT'}`;
-            }
-
-            parts.push(colDef);
+        const core = this._getCore();
+        if (core?.buildCreateTableSQL) {
+            return core.buildCreateTableSQL({ table_name: tableName, columns });
         }
-
-        // always add timestamps
-        if (isMySQL) {
-            parts.push('`created_at` DATETIME DEFAULT CURRENT_TIMESTAMP');
-            parts.push('`updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP');
-            return `CREATE TABLE IF NOT EXISTS \`${tableName}\` (\n  ${parts.join(',\n  ')}\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`;
-        } else {
-            parts.push(`"created_at" TEXT DEFAULT (datetime('now', 'localtime'))`);
-            parts.push(`"updated_at" TEXT DEFAULT (datetime('now', 'localtime'))`);
-            return `CREATE TABLE IF NOT EXISTS "${tableName}" (\n  ${parts.join(',\n  ')}\n)`;
-        }
+        return '';
     }
 
-    _buildAlterAddColumn(tableName, col) {
-        let def = `ALTER TABLE "${tableName}" ADD COLUMN "${col.column_name}"`;
-
-        if (col.sql_type) {
-            const upperSql = String(col.sql_type).toUpperCase();
-            if (upperSql === 'PASSWORD') {
-                def += ` VARCHAR(${col.length_precision || 255})`;
-            } else if (upperSql === 'FK') {
-                def += ' INTEGER';
-            } else if (col.length_precision && ['VARCHAR', 'CHAR', 'DECIMAL', 'NUMERIC', 'FLOAT'].includes(upperSql)) {
-                def += ` ${upperSql}(${col.length_precision})`;
-            } else {
-                def += ` ${upperSql}`;
-            }
-        } else {
-            // 100% Backward compatibility for legacy callers without sql_type
-            switch (col.col_type) {
-                case 'number': def += ' DECIMAL(10,2)'; break;
-                case 'boolean': def += ' TINYINT'; break;
-                case 'date': def += ' DATE'; break;
-                case 'datetime': def += ' DATETIME'; break;
-                case 'json': def += ' TEXT'; break;
-                case 'password': def += ` VARCHAR(${col.length_precision || 255})`; break;
-                default: def += ' TEXT';
-            }
-        }
-
-        if (col.default_value !== undefined && col.default_value !== null && String(col.default_value).trim() !== '') {
-            const isNumeric = ['number', 'int', 'integer', 'decimal', 'boolean', 'tinyint'].includes(String(col.sql_type || col.col_type).toLowerCase());
-            const dv = isNumeric ? col.default_value : `'${col.default_value}'`;
-            def += ` DEFAULT ${dv}`;
-        }
-
-        if (col.ref_table && col.ref_col) {
-            def += ` REFERENCES "${col.ref_table}"("${col.ref_col}") ON DELETE ${col.on_delete || 'RESTRICT'}`;
-        }
-
-        return def;
-    }
-
-    _getTable(tableName) {
-        const row = this.db.prepare(
-            `SELECT * FROM sys_table WHERE table_name = ? AND active = 1`
-        ).get(tableName);
+    async _getTable(tableName) {
+        const row = await this._queryOne(
+            `SELECT * FROM sys_table WHERE table_name = ? AND active = 1`,
+            [tableName]
+        );
         if (!row) throw new Error(`[sutramEngine] Table "${tableName}" not found in sys_table`);
         return row;
     }

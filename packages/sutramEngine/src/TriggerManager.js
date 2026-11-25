@@ -14,10 +14,34 @@
 
 class TriggerManager {
 
-    constructor(db) {
-        this.db    = db;
+    constructor(engineOrCore) {
+        this.engine = (engineOrCore && engineOrCore.core) ? engineOrCore : null;
+        this.core = this.engine ? this.engine.core : (typeof engineOrCore?.query === 'function' ? engineOrCore : null);
+        this.db = this.core?.db || (!this.core ? engineOrCore : null);
         // cache: { 'products:INSERT': [{ ...trigger, actions: [...] }] }
         this._cache = {};
+    }
+
+    _q(id) {
+        return this.core?.quoteId ? this.core.quoteId(id) : `"${String(id).replace(/"/g, '""')}"`;
+    }
+
+    async _query(sql, params = []) {
+        if (this.core?.query) return await this.core.query(sql, params);
+        if (this.db?.prepare) return this.db.prepare(sql).all(...(Array.isArray(params) ? params : [params]));
+        return [];
+    }
+
+    async _queryOne(sql, params = []) {
+        if (this.core?.queryOne) return await this.core.queryOne(sql, params);
+        if (this.db?.prepare) return this.db.prepare(sql).get(...(Array.isArray(params) ? params : [params])) ?? null;
+        return null;
+    }
+
+    async _run(sql, params = []) {
+        if (this.core?.run) return await this.core.run(sql, params);
+        if (this.db?.prepare) return this.db.prepare(sql).run(...(Array.isArray(params) ? params : [params]));
+        return { changes: 0 };
     }
 
     // ─────────────────────────────────────────────────────────
@@ -26,27 +50,32 @@ class TriggerManager {
     // ─────────────────────────────────────────────────────────
 
     // load from sys_ tables — managed mode
-    load() {
+    async load() {
         this._cache = {};
 
-        const triggers = this.db.prepare(
-            `SELECT * FROM sys_trigger WHERE active = 1`
-        ).all();
+        try {
+            const triggers = await this._query(
+                `SELECT * FROM sys_trigger WHERE active = 1`
+            );
 
-        for (const trigger of triggers) {
-            const actions = this.db.prepare(
-                `SELECT * FROM sys_trigger_action
-                 WHERE trigger_id = ? AND active = 1
-                 ORDER BY sort_order ASC`
-            ).all(trigger._id);
+            for (const trigger of triggers) {
+                const actions = await this._query(
+                    `SELECT * FROM sys_trigger_action
+                     WHERE trigger_id = ? AND active = 1
+                     ORDER BY sort_order ASC`,
+                    [trigger._id]
+                );
 
-            const key = `${trigger.source_table}:${trigger.event}`;
-            if (!this._cache[key]) this._cache[key] = [];
-            this._cache[key].push({ ...trigger, actions });
+                const key = `${trigger.source_table}:${trigger.event}`;
+                if (!this._cache[key]) this._cache[key] = [];
+                this._cache[key].push({ ...trigger, actions });
+            }
+
+            const count = Object.values(this._cache).flat().length;
+            console.log(`[sutramEngine] ✓ ${count} trigger(s) loaded from sys_`);
+        } catch (err) {
+            console.warn('[sutramEngine] TriggerManager load notice:', err.message);
         }
-
-        const count = Object.values(this._cache).flat().length;
-        console.log(`[sutramEngine] ✓ ${count} trigger(s) loaded from sys_`);
     }
 
     // load from array — direct mode
@@ -101,7 +130,7 @@ class TriggerManager {
     // }
     // ─────────────────────────────────────────────────────────
 
-    create(def) {
+    async create(def) {
         if (!def.trigger_name) throw new Error('[sutramEngine] trigger_name required');
         if (!def.source_table) throw new Error('[sutramEngine] source_table required');
         if (!def.event)        throw new Error('[sutramEngine] event required (INSERT/UPDATE/DELETE)');
@@ -109,13 +138,18 @@ class TriggerManager {
             throw new Error('[sutramEngine] at least one action required');
         }
 
-        const run = this.db.transaction(() => {
-            const res = this.db.prepare(`
+        const needTx = this.core ? !this.core.inTransaction : !this.db?.inTransaction;
+        let triggerId;
+        try {
+            if (needTx && this.core?.begin) await this.core.begin();
+            else if (needTx && this.db) this.db.prepare('BEGIN').run();
+
+            const res = await this._run(`
                 INSERT INTO sys_trigger
                   (trigger_name, label, source_table, event,
                    condition_type, condition_col, condition_value, condition_sql)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            `).run(
+            `, [
                 def.trigger_name,
                 def.label ?? def.trigger_name,
                 def.source_table,
@@ -124,18 +158,18 @@ class TriggerManager {
                 def.condition_col   ?? null,
                 def.condition_value ?? null,
                 def.condition_sql   ?? null,
-            );
+            ]);
 
-            const triggerId = res.lastInsertRowid;
+            triggerId = res.insertId ?? res.lastInsertRowid;
 
             for (let i = 0; i < def.actions.length; i++) {
                 const action = def.actions[i];
-                this.db.prepare(`
+                await this._run(`
                     INSERT INTO sys_trigger_action
                       (trigger_id, sort_order, action_type, target_table,
-                       field_map, condition, raw_sql)
+                       field_map, ${this._q('condition')}, raw_sql)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                `).run(
+                `, [
                     triggerId,
                     action.sort_order ?? i,
                     action.action_type,
@@ -143,64 +177,67 @@ class TriggerManager {
                     action.field_map ? JSON.stringify(action.field_map) : '{}',
                     action.condition  ?? null,
                     action.raw_sql    ?? null,
-                );
+                ]);
             }
 
-            return triggerId;
-        });
+            if (needTx && this.core?.commit) await this.core.commit();
+            else if (needTx && this.db) this.db.prepare('COMMIT').run();
+        } catch (err) {
+            if (needTx && this.core?.rollback) await this.core.rollback();
+            else if (needTx && this.db?.inTransaction) this.db.prepare('ROLLBACK').run();
+            throw err;
+        }
 
-        const id = run();
-        this.load(); // refresh cache
+        await this.load(); // refresh cache
         console.log(`[sutramEngine] ✓ Trigger "${def.trigger_name}" created`);
-        return id;
+        return triggerId;
     }
 
     // ─────────────────────────────────────────────────────────
     // ENABLE / DISABLE
     // ─────────────────────────────────────────────────────────
 
-    enable(triggerId) {
-        this.db.prepare(`UPDATE sys_trigger SET active = 1 WHERE _id = ?`).run(triggerId);
-        this.load();
+    async enable(triggerId) {
+        await this._run(`UPDATE sys_trigger SET active = 1 WHERE _id = ?`, [triggerId]);
+        await this.load();
     }
 
-    disable(triggerId) {
-        this.db.prepare(`UPDATE sys_trigger SET active = 0 WHERE _id = ?`).run(triggerId);
-        this.load();
+    async disable(triggerId) {
+        await this._run(`UPDATE sys_trigger SET active = 0 WHERE _id = ?`, [triggerId]);
+        await this.load();
     }
 
-    delete(triggerId) {
+    async delete(triggerId) {
         // CASCADE handles sys_trigger_action rows
-        this.db.prepare(`DELETE FROM sys_trigger WHERE _id = ?`).run(triggerId);
-        this.load();
+        await this._run(`DELETE FROM sys_trigger WHERE _id = ?`, [triggerId]);
+        await this.load();
     }
 
-    getTriggers() {
-        return this.db.prepare(`SELECT * FROM sys_trigger ORDER BY _id ASC`).all();
+    async getTriggers() {
+        return await this._query(`SELECT * FROM sys_trigger ORDER BY _id ASC`);
+    }
+
+    async getActions(triggerId) {
+        return await this._query(
+            `SELECT * FROM sys_trigger_action WHERE trigger_id = ? ORDER BY sort_order ASC`,
+            [triggerId]
+        );
     }
 
     // ─────────────────────────────────────────────────────────
     // EXECUTE — called by Engine after insert/update/delete
-    //
-    // tableName : 'products'
-    // event     : 'INSERT' | 'UPDATE' | 'DELETE'
-    // newRow    : the row after operation  (null for DELETE)
-    // oldRow    : the row before operation (null for INSERT)
-    //
-    // IMPORTANT: This must be called INSIDE the same transaction
-    // as the original operation so actions are atomic.
     // ─────────────────────────────────────────────────────────
 
-    execute(tableName, event, newRow, oldRow = null) {
+    async execute(tableName, event, newRow, oldRow = null) {
         const key      = `${tableName}:${event}`;
         const triggers = this._cache[key];
         if (!triggers || triggers.length === 0) return;
 
         for (const trigger of triggers) {
-            if (!this._checkCondition(trigger, newRow, oldRow)) continue;
+            if (!(await this._checkCondition(trigger, newRow, oldRow))) continue;
 
             for (const action of trigger.actions) {
-                this._runAction(action, newRow, oldRow);
+                await this._runAction(action, newRow, oldRow);
             }
         }
     }
@@ -209,7 +246,7 @@ class TriggerManager {
     // PRIVATE — condition check
     // ─────────────────────────────────────────────────────────
 
-    _checkCondition(trigger, newRow, oldRow) {
+    async _checkCondition(trigger, newRow, oldRow) {
         switch (trigger.condition_type) {
 
             case 'always':
@@ -222,14 +259,17 @@ class TriggerManager {
             }
 
             case 'raw_sql':
-                // raw_sql conditions are evaluated as SQLite expressions
-                // We do a quick SELECT to evaluate the condition
-                // Using the new row's values as bound params
                 try {
-                    const row = newRow ?? oldRow;
-                    const sql = `SELECT CASE WHEN (${trigger.condition_sql}) THEN 1 ELSE 0 END as result`;
-                    const res = this.db.prepare(sql).get(row ?? {});
-                    return res?.result === 1;
+                    const row = newRow ?? oldRow ?? {};
+                    let expr = String(trigger.condition_sql || '1=0');
+                    const params = [];
+                    expr = expr.replace(/:([a-zA-Z0-9_]+)/g, (_, key) => {
+                        params.push(row[key] ?? null);
+                        return '?';
+                    });
+                    const sql = `SELECT CASE WHEN (${expr}) THEN 1 ELSE 0 END as result`;
+                    const res = await this._queryOne(sql, params);
+                    return Number(res?.result) === 1;
                 } catch {
                     return false;
                 }
@@ -243,7 +283,7 @@ class TriggerManager {
     // PRIVATE — run single action
     // ─────────────────────────────────────────────────────────
 
-    _runAction(action, newRow, oldRow) {
+    async _runAction(action, newRow, oldRow) {
         switch (action.action_type) {
 
             case 'insert_row': {
@@ -252,10 +292,10 @@ class TriggerManager {
                 if (Object.keys(data).length === 0) return;
 
                 const keys   = Object.keys(data);
-                const sql    = `INSERT INTO "${action.target_table}"
-                                (${keys.map(k => `"${k}"`).join(', ')})
+                const sql    = `INSERT INTO ${this._q(action.target_table)}
+                                (${keys.map(k => this._q(k)).join(', ')})
                                 VALUES (${keys.map(() => '?').join(', ')})`;
-                this.db.prepare(sql).run(...Object.values(data));
+                await this._run(sql, Object.values(data));
                 break;
             }
 
@@ -271,9 +311,9 @@ class TriggerManager {
                 const updateKeys = Object.keys(resolved).filter(k => k !== '__where__');
                 if (updateKeys.length === 0) return;
 
-                const setCols = updateKeys.map(k => `"${k}" = ?`).join(', ');
-                const sql     = `UPDATE "${action.target_table}" SET ${setCols} WHERE ${action.condition}`;
-                this.db.prepare(sql).run(...updateKeys.map(k => resolved[k]));
+                const setCols = updateKeys.map(k => `${this._q(k)} = ?`).join(', ');
+                const sql     = `UPDATE ${this._q(action.target_table)} SET ${setCols} WHERE ${action.condition}`;
+                await this._run(sql, updateKeys.map(k => resolved[k]));
                 break;
             }
 
@@ -282,18 +322,18 @@ class TriggerManager {
                     console.warn('[sutramEngine] delete_row action missing condition — skipped');
                     return;
                 }
-                const sql = `DELETE FROM "${action.target_table}" WHERE ${action.condition}`;
-                this.db.prepare(sql).run();
+                const sql = `DELETE FROM ${this._q(action.target_table)} WHERE ${action.condition}`;
+                await this._run(sql);
                 break;
             }
 
             case 'raw_sql': {
                 if (!action.raw_sql) return;
                 try {
-                    this.db.prepare(action.raw_sql).run();
+                    await this._run(action.raw_sql);
                 } catch (err) {
                     console.error(`[sutramEngine] raw_sql action failed: ${err.message}`);
-                    throw err; // re-throw so transaction rolls back
+                    throw err;
                 }
                 break;
             }

@@ -1,43 +1,35 @@
 // src/migrations/excel.migrations.js
 // ─────────────────────────────────────────────────────────────
-// sutramexcel own migration list.
-// Tracked via xls_meta.xls_version — separate from:
-//   user_version pragma   (sutramCore user migrations)
-//   sys_meta.engine_version (sutramEngine sys_ tables)
-//
-// Rules — same as sutramCore:
-//   - Each version = array of SQL strings
-//   - Never edit past versions — add new array at end
+// sutramexcel declarative migration definitions.
+// Executed cleanly through sutramEngine.migrateSystemModule('xls_version', ...)
+// 100% database-agnostic — zero direct SQL dialect code.
 // ─────────────────────────────────────────────────────────────
+
+'use strict';
 
 module.exports = [
 
-    // ── version 1 — xls_meta + xls_dictionary ─────────────────
+    // ── version 1 — xls_dictionary ──────────────────────────────
     [
-        // xls_meta — excel package version tracking
-        `CREATE TABLE IF NOT EXISTS xls_meta (
-            key   TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        )`,
-
-        `INSERT OR IGNORE INTO xls_meta (key, value)
-         VALUES ('xls_version', '0')`,
-
-        // xls_dictionary — correction memory
-        // "kulo" matched to unit._id=5 → save here
-        // next import → "kulo" auto-resolved to 5
-        `CREATE TABLE IF NOT EXISTS xls_dictionary (
-            _id        INTEGER PRIMARY KEY AUTOINCREMENT,
-            type       TEXT NOT NULL,
-            name       TEXT NOT NULL,
-            ref_id     TEXT,
-            ref_id2    TEXT,
-            extra_note TEXT,
-            active     INTEGER DEFAULT 1,
-            created_at TEXT DEFAULT (datetime('now', 'localtime')),
-            updated_at TEXT DEFAULT (datetime('now', 'localtime')),
-            UNIQUE(type, name)
-        )`,
+        {
+            action: 'ensureTable',
+            table: {
+                table_name: 'xls_dictionary',
+                label: 'Excel Import Dictionary',
+                description: 'Correction memory mapping Excel aliases to database reference IDs',
+                timestamps: true,
+                uniqueKeys: [['type', 'name']],
+                columns: [
+                    { column_name: '_id',        label: 'ID',         col_type: 'number',  sql_type: 'INTEGER', is_pk: 1, is_required: 0 },
+                    { column_name: 'type',       label: 'Type',       col_type: 'string',  sql_type: 'VARCHAR', length_precision: '191', is_required: 1 },
+                    { column_name: 'name',       label: 'Alias Name', col_type: 'string',  sql_type: 'VARCHAR', length_precision: '191', is_required: 1 },
+                    { column_name: 'ref_id',     label: 'Ref ID',     col_type: 'string',  sql_type: 'VARCHAR', length_precision: '191', is_required: 0 },
+                    { column_name: 'ref_id2',    label: 'Ref ID 2',   col_type: 'string',  sql_type: 'VARCHAR', length_precision: '191', is_required: 0 },
+                    { column_name: 'extra_note', label: 'Notes',      col_type: 'string',  sql_type: 'TEXT',    is_required: 0 },
+                    { column_name: 'active',     label: 'Active',     col_type: 'boolean', sql_type: 'TINYINT', is_required: 0, default_value: '1' }
+                ]
+            }
+        }
     ],
 
 ];

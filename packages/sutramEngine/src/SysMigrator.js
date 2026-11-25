@@ -12,24 +12,29 @@ const mysqlMigrations   = require('./migrations/sys.migrations.mysql');
 
 class SysMigrator {
 
-    constructor(dbOrAdapter) {
-        this.target = dbOrAdapter;
-        // Determine whether target is an async adapter (mysql2) or synchronous better-sqlite3 instance
-        this.isAsync = typeof dbOrAdapter?.prepare !== 'function' && typeof dbOrAdapter?.run === 'function';
+    constructor(coreOrDb) {
+        this.target = coreOrDb;
+        // Core object has .query/.run/.dialect; legacy callers may pass better-sqlite3 db or MySQLAdapter
+        this.isCore = typeof coreOrDb?.query === 'function' && typeof coreOrDb?.dialect === 'string';
+        this.dialect = this.isCore ? coreOrDb.dialect : (coreOrDb?.dialect === 'mysql' ? 'mysql' : 'sqlite');
+        this.isAsync = this.dialect === 'mysql' || (typeof coreOrDb?.prepare !== 'function' && typeof coreOrDb?.run === 'function');
     }
 
-    run() {
+    async run() {
         if (this.isAsync) {
-            return this._runMySQL();
+            return await this._runMySQL();
         }
         return this._runSQLite();
     }
 
     // ─────────────────────────────────────────────────────────
-    // SQLite Migration Runner (100% backward compatible sync)
+    // SQLite Migration Runner
     // ─────────────────────────────────────────────────────────
     _runSQLite() {
-        const db = this.target;
+        const db = this.isCore ? this.target.db : this.target;
+        if (!db || typeof db.pragma !== 'function') {
+            return;
+        }
 
         // Step 1: ensure sys_meta exists
         db.pragma('foreign_keys = OFF');
@@ -69,7 +74,13 @@ class SysMigrator {
 
                 const runVersion = db.transaction(() => {
                     for (const sql of sqlList) {
-                        db.prepare(sql).run();
+                        try {
+                            db.prepare(sql).run();
+                        } catch (sqlErr) {
+                            if (!/duplicate column name|already exists/i.test(sqlErr.message || '')) {
+                                throw sqlErr;
+                            }
+                        }
                     }
                     db.prepare(
                         `UPDATE sys_meta SET value = ? WHERE key = 'engine_version'`
@@ -92,7 +103,10 @@ class SysMigrator {
     // MySQL Migration Runner (Async)
     // ─────────────────────────────────────────────────────────
     async _runMySQL() {
-        const adapter = this.target;
+        const adapter = this.isCore ? this.target.adapter : this.target;
+        if (!adapter || typeof adapter.run !== 'function') {
+            return;
+        }
 
         // Step 1: ensure sys_meta exists
         await adapter.run('SET FOREIGN_KEY_CHECKS = 0');

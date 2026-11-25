@@ -82,11 +82,11 @@ function buildExcelRouter(sutramExcel) {
     // ── GET /tables ───────────────────────────────────────────
     router.get('/tables', (req, res) => {
         try {
-            // Dynamically register any active tables from engine schema not yet in _configs
+            // Dynamically register any active user tables from engine schema not yet in _configs
             if (sutramExcel && sutramExcel.engine) {
                 const schema = sutramExcel.engine._schema || {};
                 for (const tableName of Object.keys(schema)) {
-                    if (tableName.startsWith('sys_') || tableName.startsWith('sqlite_')) continue;
+                    if (tableName.startsWith('sys_') || tableName.startsWith('xls_') || tableName.startsWith('sqlite_')) continue;
                     if (!sutramExcel._configs[tableName]) {
                         try {
                             const tbl = sutramExcel.engine.table(tableName);
@@ -96,7 +96,7 @@ function buildExcelRouter(sutramExcel) {
                 }
             }
             const tables = Object.entries(sutramExcel._configs)
-                .filter(([name]) => !name.startsWith('sys_') && !name.startsWith('sqlite_'))
+                .filter(([name]) => !name.startsWith('sys_') && !name.startsWith('xls_') && !name.startsWith('sqlite_'))
                 .map(([name, cfg]) => ({
                     table:        name,
                     display_name: cfg.display_name ?? name,
@@ -106,13 +106,13 @@ function buildExcelRouter(sutramExcel) {
     });
 
     // ── GET /reports ──────────────────────────────────────────
-    router.get('/reports', (req, res) => {
+    router.get('/reports', async (req, res) => {
         try {
             const reports = [];
-            const engine = sutramExcel._engine;
+            const engine = sutramExcel.engine;
             if (engine && engine.report && typeof engine.report.getReports === 'function') {
                 try {
-                    const sysReps = engine.report.getReports();
+                    const sysReps = await engine.report.getReports();
                     for (const r of sysReps) {
                         if (r.active !== 0) {
                             reports.push({
@@ -129,18 +129,16 @@ function buildExcelRouter(sutramExcel) {
                 } catch {}
             }
 
-            if (engine && engine.db && typeof engine.db.prepare === 'function') {
+            if (engine && typeof engine.getViews === 'function') {
                 try {
-                    const views = engine.db.prepare(
-                        `SELECT name FROM sqlite_master WHERE type = 'view' AND name NOT LIKE 'sys_%' AND name NOT LIKE 'sqlite_%'`
-                    ).all();
-                    for (const v of views) {
-                        if (!reports.some(r => r.id === v.name)) {
+                    const views = await engine.getViews();
+                    for (const vName of views) {
+                        if (!reports.some(r => r.id === vName)) {
                             reports.push({
-                                id: v.name,
-                                table: v.name,
-                                display_name: v.name,
-                                title: v.name,
+                                id: vName,
+                                table: vName,
+                                display_name: vName,
+                                title: vName,
                                 desc: 'Live Database SQL View',
                                 icon: 'pi-chart-bar',
                                 category: 'Database Views'
@@ -262,58 +260,22 @@ function buildExcelRouter(sutramExcel) {
 
     // ── GET /ref-data/:table ──────────────────────────────────
     // Returns all rows for reference table (e.g. state, category, unit)
-    router.get('/ref-data/:table', (req, res) => {
+    router.get('/ref-data/:table', async (req, res) => {
         try {
             const tblName = req.params.table;
-            let rows = [];
-            try {
-                rows = sutramExcel.engine.table(tblName).getAll({}, { full: false });
-            } catch {
-                if (sutramExcel.engine._sutram) {
-                    rows = sutramExcel.engine._sutram.table(tblName).getAll({}, { full: false });
-                }
-            }
+            const rows = await sutramExcel.engine.getAll(tblName, {}, { full: false });
             ok(res, rows);
         } catch (e) { fail(res, e, 500); }
     });
 
-    // ── Helper to resolve Database for sys_meta storage ───────
-    function getDb() {
-        let db = null;
-        if (sutramExcel.engine) {
-            db = sutramExcel.engine.db?.db || sutramExcel.engine.db;
-            if (!db && sutramExcel.engine._sutram) {
-                db = sutramExcel.engine._sutram.db?.db || sutramExcel.engine._sutram.db;
-            }
-        }
-        return db;
-    }
-
-    function ensureSysMeta(db) {
-        if (!db || typeof db.prepare !== 'function') return;
-        try {
-            db.prepare(`
-                CREATE TABLE IF NOT EXISTS sys_meta (
-                    key   TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                )
-            `).run();
-        } catch {}
-    }
-
     // ── GET /table-ui-config/:table ───────────────────────────
-    router.get('/table-ui-config/:table', (req, res) => {
+    router.get('/table-ui-config/:table', async (req, res) => {
         try {
             const tbl = req.params.table;
-            const db = getDb();
-            if (!db || typeof db.prepare !== 'function') {
-                return ok(res, null);
-            }
-            ensureSysMeta(db);
-            const row = db.prepare(`SELECT value FROM sys_meta WHERE key = ?`).get(`table_ui_config:${tbl}`);
-            if (row && row.value) {
+            const raw = await sutramExcel.engine.getMeta(`table_ui_config:${tbl}`);
+            if (raw) {
                 try {
-                    const saved = JSON.parse(row.value);
+                    const saved = typeof raw === 'string' ? JSON.parse(raw) : raw;
                     return ok(res, saved);
                 } catch {}
             }
@@ -324,25 +286,17 @@ function buildExcelRouter(sutramExcel) {
     });
 
     // ── POST /table-ui-config/:table ──────────────────────────
-    router.post('/table-ui-config/:table', (req, res) => {
+    router.post('/table-ui-config/:table', async (req, res) => {
         try {
             const tbl = req.params.table;
             const { display_name, columns = [], selected_keys = [] } = req.body;
-            const db = getDb();
-            if (!db || typeof db.prepare !== 'function') {
-                return fail(res, new Error('Database not accessible'), 500);
-            }
-            ensureSysMeta(db);
-            db.prepare(`
-                INSERT INTO sys_meta (key, value) VALUES (?, ?)
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value
-            `).run(`table_ui_config:${tbl}`, JSON.stringify({
+            await sutramExcel.engine.setMeta(`table_ui_config:${tbl}`, {
                 table_name: tbl,
                 display_name,
                 columns,
                 selected_keys,
                 updated_at: new Date().toISOString()
-            }));
+            });
 
             ok(res, { success: true, message: `Configuration saved for table "${tbl}"` });
         } catch (e) {
@@ -351,18 +305,13 @@ function buildExcelRouter(sutramExcel) {
     });
 
     // ── GET /ui-sutras/:table ─────────────────────────────────
-    router.get('/ui-sutras/:table', (req, res) => {
+    router.get('/ui-sutras/:table', async (req, res) => {
         try {
             const tbl = req.params.table;
-            const db = getDb();
-            if (!db || typeof db.prepare !== 'function') {
-                return ok(res, []);
-            }
-            ensureSysMeta(db);
-            const row = db.prepare(`SELECT value FROM sys_meta WHERE key = ?`).get(`ui_sutras:${tbl}`);
-            if (row && row.value) {
+            const raw = await sutramExcel.engine.getMeta(`ui_sutras:${tbl}`);
+            if (raw) {
                 try {
-                    const parsed = JSON.parse(row.value);
+                    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
                     return ok(res, parsed);
                 } catch {}
             }
@@ -373,19 +322,11 @@ function buildExcelRouter(sutramExcel) {
     });
 
     // ── POST /ui-sutras/:table ────────────────────────────────
-    router.post('/ui-sutras/:table', (req, res) => {
+    router.post('/ui-sutras/:table', async (req, res) => {
         try {
             const tbl = req.params.table;
             const { formulas = [] } = req.body;
-            const db = getDb();
-            if (!db || typeof db.prepare !== 'function') {
-                return fail(res, new Error('Database not accessible'), 500);
-            }
-            ensureSysMeta(db);
-            db.prepare(`
-                INSERT INTO sys_meta (key, value) VALUES (?, ?)
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value
-            `).run(`ui_sutras:${tbl}`, JSON.stringify(formulas));
+            await sutramExcel.engine.setMeta(`ui_sutras:${tbl}`, formulas);
 
             ok(res, { success: true, message: `UI Sutras saved for table "${tbl}"` });
         } catch (e) {
@@ -396,7 +337,7 @@ function buildExcelRouter(sutramExcel) {
     // ── GET /data/:table ──────────────────────────────────────
     // Query: ?_limit=100&_offset=0&_search=...&_sort=...&_order=ASC|DESC&_full=1&_filters=...
     // Delegates search, filtering, sorting, and pagination completely to sutramEngine
-    router.get('/data/:table', (req, res) => {
+    router.get('/data/:table', async (req, res) => {
         try {
             const tblName = req.params.table;
             const isExport = req.query._export === '1' || req.query._limit === '-1' || req.query._limit === 'all';
@@ -432,10 +373,10 @@ function buildExcelRouter(sutramExcel) {
                 }
             }
 
-            const orderBy = validSortCol ? `\`${validSortCol}\` ${order}` : null;
+            const orderBy = validSortCol ? `${validSortCol} ${order}` : null;
 
             // Pure delegation through sutramEngine -> sutramCore
-            const result = sutramExcel.engine.search(tblName, search, {
+            const result = await sutramExcel.engine.search(tblName, search, {
                 where: filterObj,
                 limit,
                 offset,
@@ -505,6 +446,7 @@ function buildExcelRouter(sutramExcel) {
         const cfg = getConfig(req.params.table, res);
         if (!cfg) return;
         try {
+            await sutramExcel.ensureReady();
             const { rows = [] } = req.body;
             const result = await importer.verify(rows, cfg);
             ok(res, result);
@@ -518,6 +460,7 @@ function buildExcelRouter(sutramExcel) {
         const cfg = getConfig(req.params.table, res);
         if (!cfg) return;
         try {
+            await sutramExcel.ensureReady();
             const { row = {} } = req.body;
             const result = await importer.importRow(row, cfg, req);
             if (result.status === 'rejected') {
@@ -532,6 +475,7 @@ function buildExcelRouter(sutramExcel) {
         const cfg = getConfig(req.params.table, res);
         if (!cfg) return;
         try {
+            await sutramExcel.ensureReady();
             const { row = {} } = req.body;
             const result = await importer.updateRow(row, cfg, req);
             if (result.status === 'rejected') {
@@ -568,7 +512,7 @@ function buildExcelRouter(sutramExcel) {
             let deletedCount = 0;
             if (sutramExcel.engine) {
                 for (const targetId of targetIds) {
-                    const c = sutramExcel.engine.deleteById(tblName, targetId);
+                    const c = await sutramExcel.engine.deleteById(tblName, targetId);
                     deletedCount += (c || 0);
                 }
             }
@@ -579,43 +523,48 @@ function buildExcelRouter(sutramExcel) {
     // ── DICTIONARY CRUD ───────────────────────────────────────
 
     // GET /dictionary
-    router.get('/dictionary', (req, res) => {
+    router.get('/dictionary', async (req, res) => {
         try {
-            ok(res, dictionary.list());
+            await sutramExcel.ensureReady();
+            ok(res, await dictionary.list());
         } catch (e) { fail(res, e, 500); }
     });
 
     // GET /dictionary/:type
-    router.get('/dictionary/:type', (req, res) => {
+    router.get('/dictionary/:type', async (req, res) => {
         try {
-            ok(res, dictionary.list(req.params.type));
+            await sutramExcel.ensureReady();
+            ok(res, await dictionary.list(req.params.type));
         } catch (e) { fail(res, e, 500); }
     });
 
     // POST /dictionary
-    router.post('/dictionary', (req, res) => {
+    router.post('/dictionary', async (req, res) => {
         try {
+            await sutramExcel.ensureReady();
             const { type, name, ref_id, ref_id2, extra_note } = req.body;
             if (!type || !name || ref_id === undefined) {
                 return fail(res, 'type, name, ref_id required');
             }
-            const id = dictionary.add({ type, name, ref_id, ref_id2, extra_note });
+            const id = await dictionary.add({ type, name, ref_id, ref_id2, extra_note });
             ok(res, { _id: id });
         } catch (e) { fail(res, e); }
     });
 
     // PUT /dictionary/:id
-    router.put('/dictionary/:id', (req, res) => {
+    router.put('/dictionary/:id', async (req, res) => {
         try {
-            dictionary.update(Number(req.params.id), req.body);
+            await sutramExcel.ensureReady();
+            await dictionary.update(Number(req.params.id), req.body);
             ok(res, { updated: true });
         } catch (e) { fail(res, e); }
     });
 
     // DELETE /dictionary/:id  (soft delete)
-    router.delete('/dictionary/:id', (req, res) => {
+    router.delete('/dictionary/:id', async (req, res) => {
         try {
-            dictionary.delete(Number(req.params.id));
+            await sutramExcel.ensureReady();
+            await dictionary.delete(Number(req.params.id));
             ok(res, { deleted: true });
         } catch (e) { fail(res, e); }
     });

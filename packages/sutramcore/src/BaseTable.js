@@ -359,6 +359,14 @@ class BaseTable {
             return { clause: trimmed ? `WHERE ${trimmed}` : '', params: [] };
         }
 
+        if (typeof where === 'object' && typeof where.__sql === 'string') {
+            const trimmed = where.__sql.trim();
+            return {
+                clause: trimmed ? `WHERE ${trimmed}` : '',
+                params: Array.isArray(where.__params) ? where.__params : []
+            };
+        }
+
         if (typeof where === 'object') {
             const keys = Object.keys(where);
             if (keys.length === 0) return { clause: '', params: [] };

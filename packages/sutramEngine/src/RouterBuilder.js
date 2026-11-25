@@ -58,7 +58,7 @@ function buildRouter(engine) {
     // Reserved params start with _ : _limit, _page, _order, _full
     // Everything else → where object
 
-    function parseQuery(query) {
+    function parseQuery(query, tbl = null) {
         const where = {};
         let limit = null;
         let offset = null;
@@ -77,6 +77,10 @@ function buildRouter(engine) {
             }
             if (key === '_order') { orderBy = val; continue; }
             if (key === '_full') { full = val !== 'false' && val !== '0'; continue; }
+            // Server-level project selector query param — ignore unless table defines a 'project' column
+            if (key === 'project' && !tbl?.columns?.project) continue;
+            // Ignore cache-buster / unknown underscore params unless table defines them
+            if (key.startsWith('_') && !tbl?.columns?.[key]) continue;
             // everything else is a where condition
             // try to coerce numbers
             where[key] = isNaN(val) || val === '' ? val : Number(val);
@@ -111,11 +115,9 @@ function buildRouter(engine) {
     // ═════════════════════════════════════════════════════════
 
     // GET /_sutram/menu — sidebar menu + reports list
-    router.get('/_sutram/menu', (req, res) => {
+    router.get('/_sutram/menu', async (req, res) => {
         try {
-            // direct mode — ui manager reads sys_ tables
-            // if sys_table_ui empty, falls back to sys_table data
-            const menu = engine.ui.getMenu();
+            const menu = await engine.ui.getMenu();
             ok(res, menu);
         } catch (e) {
             fail(res, e, 500);
@@ -123,19 +125,19 @@ function buildRouter(engine) {
     });
 
     // GET /_sutram/schema/:table — full column config for frontend
-    router.get('/_sutram/schema/:table', (req, res) => {
+    router.get('/_sutram/schema/:table', async (req, res) => {
         try {
-            const schema = engine.ui.getTableSchema(req.params.table);
+            const schema = await engine.ui.getTableSchema(req.params.table);
             ok(res, schema);
         } catch (e) {
             fail(res, e, 404);
         }
     });
 
-    // POST /_sutram/reports/:name/run — execute named CTE report
-    router.post('/_sutram/reports/:name/run', (req, res) => {
+    // POST /_sutram/reports/:name/run — execute named CTE report / procedure
+    router.post('/_sutram/reports/:name/run', async (req, res) => {
         try {
-            const rows = engine.report.run(req.params.name, req.body ?? {});
+            const rows = await engine.report.run(req.params.name, req.body ?? {});
             ok(res, rows, { report: req.params.name, count: rows.length });
         } catch (e) {
             fail(res, e, 400);
@@ -147,23 +149,22 @@ function buildRouter(engine) {
     // ═════════════════════════════════════════════════════════
 
     // GET /:table — getAll with query params
-    // ?active=1&dept_id=2&_limit=20&_page=1&_order=name+ASC
-    router.get('/:table', (req, res, next) => {
+    router.get('/:table', async (req, res, next) => {
         if (RESERVED.includes(req.params.table)) return next();
         const tbl = getTable(req.params.table, res, next);
         if (!tbl) return;
 
         try {
-            const { where, limit, offset, orderBy, full } = parseQuery(req.query);
+            const { where, limit, offset, orderBy, full } = parseQuery(req.query, tbl);
             const opts = { full };
             if (orderBy) opts.orderBy = orderBy;
             if (limit) opts.limit = limit;
             if (offset) opts.offset = offset;
 
-            const result = tbl.getAll(where, opts);
+            const result = await tbl.getAll(where, opts);
             const total = Object.keys(where).length
-                ? tbl.count(where)
-                : tbl.count();
+                ? await tbl.count(where)
+                : await tbl.count();
 
             ok(res, result, { total, count: result.length });
         } catch (e) {
@@ -172,12 +173,12 @@ function buildRouter(engine) {
     });
 
     // GET /:table/:id — getById
-    router.get('/:table/:id', (req, res, next) => {
+    router.get('/:table/:id', async (req, res, next) => {
         const tbl = getTable(req.params.table, res, next);
         if (!tbl) return;
 
         try {
-            const row = tbl.getById(Number(req.params.id));
+            const row = await tbl.getById(Number(req.params.id));
             if (!row) return fail(res, `Record ${req.params.id} not found`, 404);
             ok(res, row);
         } catch (e) {
@@ -186,10 +187,10 @@ function buildRouter(engine) {
     });
 
     // POST /:table — insert (trigger-aware)
-    router.post('/:table', (req, res, next) => {
+    router.post('/:table', async (req, res, next) => {
         if (RESERVED.includes(req.params.table)) return next();
         try {
-            const row = engine.insert(req.params.table, req.body);
+            const row = await engine.insert(req.params.table, req.body);
             ok(res, row);
         } catch (e) {
             fail(res, e);
@@ -197,8 +198,7 @@ function buildRouter(engine) {
     });
 
     // POST /:table/query — getAll with raw WHERE body
-    // Body: { where: "price > 100", limit: 50, page: 2, orderBy: "price DESC", full: true }
-    router.post('/:table/query', (req, res, next) => {
+    router.post('/:table/query', async (req, res, next) => {
         const tbl = getTable(req.params.table, res, next);
         if (!tbl) return;
 
@@ -210,8 +210,8 @@ function buildRouter(engine) {
             if (limit) opts.limit = limit;
             if (offset) opts.offset = offset;
 
-            const result = tbl.getAll(where, opts);
-            const total = tbl.count(where);
+            const result = await tbl.getAll(where, opts);
+            const total = await tbl.count(where);
             ok(res, result, { total, count: result.length });
         } catch (e) {
             fail(res, e);
@@ -219,9 +219,9 @@ function buildRouter(engine) {
     });
 
     // PUT /:table/:id — updateById (trigger-aware)
-    router.put('/:table/:id', (req, res) => {
+    router.put('/:table/:id', async (req, res) => {
         try {
-            const row = engine.updateById(req.params.table, req.body, Number(req.params.id));
+            const row = await engine.updateById(req.params.table, req.body, Number(req.params.id));
             ok(res, row);
         } catch (e) {
             fail(res, e);
@@ -229,9 +229,9 @@ function buildRouter(engine) {
     });
 
     // DELETE /:table/:id — deleteById (trigger-aware)
-    router.delete('/:table/:id', (req, res) => {
+    router.delete('/:table/:id', async (req, res) => {
         try {
-            const changes = engine.deleteById(req.params.table, Number(req.params.id));
+            const changes = await engine.deleteById(req.params.table, Number(req.params.id));
             ok(res, { deleted: changes });
         } catch (e) {
             fail(res, e);

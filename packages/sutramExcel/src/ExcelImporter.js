@@ -254,10 +254,8 @@ class ExcelImporter {
         for (const col of (tableConfig.autoIncrement ?? [])) {
             if (!row[col]) {
                 try {
-                    const r = this.engine.prepare(
-                        `SELECT MAX(${col}) as last FROM ${tblName}`
-                    ).get();
-                    row[col] = (r?.last ?? 0) + 1;
+                    const last = await this.engine.max(tblName, col);
+                    row[col] = (Number(last) || 0) + 1;
                 } catch {
                     row[col] = 1;
                 }
@@ -360,7 +358,7 @@ class ExcelImporter {
         if (!Object.keys(where).length) return [];
         try {
             const tblName = tableConfig.table || tableConfig.tableName || tableConfig.table_name;
-            return this.engine.getAll(tblName, where, { full: false });
+            return await this.engine.getAll(tblName, where, { full: false });
         } catch {
             return [];
         }

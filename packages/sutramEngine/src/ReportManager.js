@@ -24,33 +24,57 @@ const ProcedureHandle = require('./ProcedureHandle');
 
 class ReportManager {
 
-    constructor(db) {
-        this.db     = db;
+    constructor(engineOrCore) {
+        this.engine = (engineOrCore && engineOrCore.core) ? engineOrCore : null;
+        this.core = this.engine ? this.engine.core : (typeof engineOrCore?.query === 'function' ? engineOrCore : null);
+        this.db = this.core?.db || (!this.core ? engineOrCore : null);
         this._cache = {}; // { report_name: { ...report, params: [...] } }
+    }
+
+    async _query(sql, params = []) {
+        if (this.core?.query) return await this.core.query(sql, params);
+        if (this.db?.prepare) return this.db.prepare(sql).all(...(Array.isArray(params) ? params : [params]));
+        return [];
+    }
+
+    async _queryOne(sql, params = []) {
+        if (this.core?.queryOne) return await this.core.queryOne(sql, params);
+        if (this.db?.prepare) return this.db.prepare(sql).get(...(Array.isArray(params) ? params : [params])) ?? null;
+        return null;
+    }
+
+    async _run(sql, params = []) {
+        if (this.core?.run) return await this.core.run(sql, params);
+        if (this.db?.prepare) return this.db.prepare(sql).run(...(Array.isArray(params) ? params : [params]));
+        return { changes: 0 };
     }
 
     // ─────────────────────────────────────────────────────────
     // LOAD FROM sys_ TABLES — managed mode
     // ─────────────────────────────────────────────────────────
 
-    load() {
+    async load() {
         this._cache = {};
         this._procedureCache = {};  // clear on reload
 
-        const reports = this.db.prepare(
-            `SELECT * FROM sys_report WHERE active = 1`
-        ).all();
+        try {
+            const reports = await this._query(
+                `SELECT * FROM sys_report WHERE active = 1`
+            );
 
-        for (const report of reports) {
-            this._cache[report.report_name] = {
-                ...report,
-                report_type:    report.report_type    ?? 'cte',
-                procedure_name: report.procedure_name ?? null,
-                params:         report.params ? JSON.parse(report.params) : [],
-            };
+            for (const report of reports) {
+                this._cache[report.report_name] = {
+                    ...report,
+                    report_type:    report.report_type    ?? 'cte',
+                    procedure_name: report.procedure_name ?? null,
+                    params:         report.params ? JSON.parse(report.params) : [],
+                };
+            }
+
+            console.log(`[sutramEngine] ✓ ${reports.length} report(s) loaded from sys_`);
+        } catch (err) {
+            console.warn('[sutramEngine] ReportManager load notice:', err.message);
         }
-
-        console.log(`[sutramEngine] ✓ ${reports.length} report(s) loaded from sys_`);
     }
 
     // ─────────────────────────────────────────────────────────
@@ -115,7 +139,7 @@ class ReportManager {
     // }
     // ─────────────────────────────────────────────────────────
 
-    create(def) {
+    async create(def) {
         if (!def.report_name) throw new Error('[sutramEngine] report_name required');
 
         const type = def.report_type ?? 'cte';
@@ -129,11 +153,11 @@ class ReportManager {
 
         const params = JSON.stringify(def.params ?? []);
 
-        this.db.prepare(`
+        await this._run(`
             INSERT INTO sys_report
               (report_name, label, description, report_type, cte_sql, procedure_name, params)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).run(
+        `, [
             def.report_name,
             def.label          ?? def.report_name,
             def.description    ?? null,
@@ -141,9 +165,9 @@ class ReportManager {
             def.cte_sql        ?? null,
             def.procedure_name ?? null,
             params,
-        );
+        ]);
 
-        this.load();
+        await this.load();
         console.log(`[sutramEngine] ✓ Report "${def.report_name}" created (type: ${type})`);
     }
 
@@ -151,8 +175,8 @@ class ReportManager {
     // UPDATE REPORT (replace SQL or params)
     // ─────────────────────────────────────────────────────────
 
-    update(reportName, updates) {
-        const report = this._getReport(reportName);
+    async update(reportName, updates) {
+        const report = await this._getReport(reportName);
 
         const fields = [];
         const values = [];
@@ -162,15 +186,16 @@ class ReportManager {
         if (updates.description) { fields.push('description = ?'); values.push(updates.description); }
         if (updates.params)      { fields.push('params = ?');      values.push(JSON.stringify(updates.params)); }
         fields.push('updated_at = ?');
-        values.push(new Date().toISOString());
+        values.push(new Date().toISOString().slice(0, 19).replace('T', ' '));
 
-        if (fields.length === 1) return; // only updated_at — nothing to do
+        if (fields.length === 1) return;
 
-        this.db.prepare(
-            `UPDATE sys_report SET ${fields.join(', ')} WHERE _id = ?`
-        ).run(...values, report._id);
+        await this._run(
+            `UPDATE sys_report SET ${fields.join(', ')} WHERE _id = ?`,
+            [...values, report._id]
+        );
 
-        this.load();
+        await this.load();
         console.log(`[sutramEngine] ✓ Report "${reportName}" updated`);
     }
 
@@ -178,24 +203,21 @@ class ReportManager {
     // DELETE REPORT
     // ─────────────────────────────────────────────────────────
 
-    delete(reportName) {
-        const report = this._getReport(reportName);
-        this.db.prepare(`DELETE FROM sys_report WHERE _id = ?`).run(report._id);
-        this.load();
+    async delete(reportName) {
+        const report = await this._getReport(reportName);
+        await this._run(`DELETE FROM sys_report WHERE _id = ?`, [report._id]);
+        await this.load();
         console.log(`[sutramEngine] ✓ Report "${reportName}" deleted`);
     }
 
     // ─────────────────────────────────────────────────────────
     // RUN REPORT
-    // params: { from: '2024-01-01', to: '2024-12-31' }
-    // Returns array of result rows.
     // ─────────────────────────────────────────────────────────
 
-    run(reportName, params = {}) {
+    async run(reportName, params = {}) {
         const report = this._cache[reportName];
         if (!report) throw new Error(`[sutramEngine] Report "${reportName}" not found`);
 
-        // apply defaults for missing params
         const finalParams = {};
         for (const p of report.params) {
             finalParams[p.name] = params[p.name] !== undefined
@@ -203,7 +225,6 @@ class ReportManager {
                 : (p.default ?? null);
         }
 
-        // validate required params
         for (const p of report.params) {
             if (p.required && finalParams[p.name] === null) {
                 throw new Error(`[sutramEngine] Report "${reportName}" missing required param: ${p.name}`);
@@ -212,28 +233,35 @@ class ReportManager {
 
         try {
             if (report.report_type === 'procedure') {
-                return this._runProcedure(report, finalParams);
+                return await this._runProcedure(report, finalParams);
             } else {
-                return this._runCTE(report, finalParams);
+                return await this._runCTE(report, finalParams);
             }
         } catch (err) {
             throw new Error(`[sutramEngine] Report "${reportName}" failed: ${err.message}`);
         }
     }
 
-    _runCTE(report, finalParams) {
-        // SQLite — :name style params
-        const stmt = this.db.prepare(report.cte_sql);
-        return stmt.all(finalParams);
+    async _runCTE(report, finalParams) {
+        // Convert :name params cleanly to ? array so SQLite and MySQL both execute identically
+        const boundParams = [];
+        const sql = String(report.cte_sql).replace(/:([a-zA-Z0-9_]+)/g, (_, name) => {
+            boundParams.push(finalParams[name] ?? null);
+            return '?';
+        });
+        return await this._query(sql, boundParams);
     }
 
-    _runProcedure(report, finalParams) {
-        // SQLite does not support stored procedures
-        // This path is for MySQL via sutramcore-mysql adapter
-        // Engine in SQLite mode should not have procedure reports
+    async _runProcedure(report, finalParams) {
+        if (this.core?.report && typeof this.core.report.run === 'function') {
+            return await this.core.report.run(report.report_name, finalParams);
+        }
+        const qMarks = Object.keys(finalParams).map(() => '?').join(', ');
+        if (this.core?.dialect === 'mysql') {
+            return await this._query(`CALL \`${report.procedure_name}\`(${qMarks})`, Object.values(finalParams));
+        }
         throw new Error(
-            `[sutramEngine] Stored procedure "${report.procedure_name}" cannot run on SQLite.\n` +
-            `Procedures are MySQL only — use sutramcore-mysql with MySQLReportManager.`
+            `[sutramEngine] Stored procedure "${report.procedure_name}" is not supported on ${this.core?.dialect || 'sqlite'}.`
         );
     }
 
@@ -241,20 +269,22 @@ class ReportManager {
     // LIST REPORTS
     // ─────────────────────────────────────────────────────────
 
-    getReports() {
-        return this.db.prepare(
+    async getReports() {
+        const rows = await this._query(
             `SELECT _id, report_name, label, description, params, active FROM sys_report ORDER BY _id ASC`
-        ).all().map(r => ({ ...r, params: JSON.parse(r.params ?? '[]') }));
+        );
+        return rows.map(r => ({ ...r, params: JSON.parse(r.params ?? '[]') }));
     }
 
     // ─────────────────────────────────────────────────────────
     // PRIVATE
     // ─────────────────────────────────────────────────────────
 
-    _getReport(reportName) {
-        const row = this.db.prepare(
-            `SELECT * FROM sys_report WHERE report_name = ?`
-        ).get(reportName);
+    async _getReport(reportName) {
+        const row = await this._queryOne(
+            `SELECT * FROM sys_report WHERE report_name = ?`,
+            [reportName]
+        );
         if (!row) throw new Error(`[sutramEngine] Report "${reportName}" not found in sys_report`);
         return row;
     }

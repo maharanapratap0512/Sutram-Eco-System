@@ -37,17 +37,34 @@ class SutramExcel {
 
         this.engine = engine;
         this._configs = {};   // { tableName: derivedConfig }
-        this._deriver = new ConfigDeriver();
+        this._deriver = new ConfigDeriver(engine);
+        this._migrator = new ExcelMigrator(engine);
 
-        // run own migrations (xls_meta, xls_dictionary)
-        const migrator = new ExcelMigrator(engine.db);
-        migrator.run();
-
-        // init managers
-        this._dictionary = new DictionaryManager(engine.db);
+        // init managers — strictly via sutramEngine (zero direct DB access)
+        this._dictionary = new DictionaryManager(engine);
         this._importer = new ExcelImporter(engine, this._dictionary);
+        this._initPromise = null;
 
         console.log('[sutramexcel] Ready');
+    }
+
+    async init() {
+        if (!this._initPromise) {
+            this._initPromise = this._migrator.run().catch(err => {
+                this._initPromise = null;
+                console.warn('[sutramexcel] Migration warning:', err.message);
+            });
+        }
+        await this._initPromise;
+        return this;
+    }
+
+    async ensureReady() {
+        if (this._initPromise) {
+            await this._initPromise;
+        } else {
+            await this.init();
+        }
     }
 
     // ─────────────────────────────────────────────────────────

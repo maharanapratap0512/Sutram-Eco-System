@@ -41,6 +41,7 @@ class ProjectManager {
 
     // Dynamic pool of instantiated { project, engine, excel, lastUsed }
     this.pool = new Map();
+    this._loadingPromises = new Map();
     this.activeProjectSlug = null;
 
     // Initialize Master Registry DB
@@ -196,10 +197,10 @@ class ProjectManager {
   /**
    * Auto-registers tables of an engine into SutramExcel
    */
-  _syncExcelRegistrations(engine, excel, forceReload = false) {
+  async _syncExcelRegistrations(engine, excel, forceReload = false) {
     const schema = engine._schema || {};
     const activeNames = new Set(
-      Object.keys(schema).filter(t => !t.startsWith('sys_') && !t.startsWith('sqlite_'))
+      Object.keys(schema).filter(t => !t.startsWith('sys_') && !t.startsWith('xls_') && !t.startsWith('sqlite_'))
     );
 
     // Prune dropped tables from Excel registry
@@ -217,7 +218,7 @@ class ProjectManager {
         try {
           const tbl = engine.table(tableName);
           if (tbl) {
-            const ui = (engine.ui && engine.ui.getTableSchema) ? engine.ui.getTableSchema(tableName) : null;
+            const ui = (engine.ui && engine.ui.getTableSchema) ? await engine.ui.getTableSchema(tableName) : null;
             excel.register(tbl, ui?.display_name ? { display_name: ui.display_name } : {});
             count++;
           }
@@ -267,30 +268,37 @@ class ProjectManager {
       `).all(username);
     }
 
-    // Enrich each project with live file stats and table counts
+    // Enrich each project with live stats and table counts
     return rows.map(p => {
       let fileSize = 0;
       let tablesCount = 0;
       let isOnline = false;
 
-      try {
-        const resolvedDbPath = this.resolveProjectDbPath(p);
-        if (resolvedDbPath && fs.existsSync(resolvedDbPath)) {
-          const stats = fs.statSync(resolvedDbPath);
-          fileSize = stats.size;
-          isOnline = true;
-
-          // Introspect table count using quick sqlite query
-          const quickDb = new Database(resolvedDbPath, { readonly: true });
-          const res = quickDb.prepare(`
-            SELECT COUNT(*) as count FROM sqlite_master
-            WHERE type = 'table' AND name NOT LIKE 'sys_%' AND name NOT LIKE 'sqlite_%'
-          `).get();
-          tablesCount = res?.count || 0;
-          quickDb.close();
+      if (p.db_type === 'mysql') {
+        isOnline = true;
+        const cached = this.pool.get(p.project_slug);
+        if (cached?.engine?._schema) {
+          tablesCount = Object.keys(cached.engine._schema).filter(t => !t.startsWith('sys_') && !t.startsWith('xls_')).length;
         }
-      } catch (e) {
-        // Safe fallback
+      } else {
+        try {
+          const resolvedDbPath = this.resolveProjectDbPath(p);
+          if (resolvedDbPath && fs.existsSync(resolvedDbPath)) {
+            const stats = fs.statSync(resolvedDbPath);
+            fileSize = stats.size;
+            isOnline = true;
+
+            const quickDb = new Database(resolvedDbPath, { readonly: true });
+            const res = quickDb.prepare(`
+              SELECT COUNT(*) as count FROM sqlite_master
+              WHERE type = 'table' AND name NOT LIKE 'sys_%' AND name NOT LIKE 'xls_%' AND name NOT LIKE 'sqlite_%'
+            `).get();
+            tablesCount = res?.count || 0;
+            quickDb.close();
+          }
+        } catch (e) {
+          // Safe fallback
+        }
       }
 
       return {
@@ -304,9 +312,10 @@ class ProjectManager {
   }
 
   /**
-   * Retrieves or initializes a live { project, engine, excel } instance for a project
+   * Retrieves or initializes a live { project, engine, excel } instance asynchronously.
+   * Deduplicates concurrent connection/bootstrap calls via _loadingPromises.
    */
-  getProject(slug) {
+  async getProject(slug) {
     if (!slug) return null;
     const cleanSlug = ProjectManager.slugify(slug);
 
@@ -317,8 +326,25 @@ class ProjectManager {
       return entry;
     }
 
-    // 2. Fetch from Master Registry
-    const project = this.masterDb.prepare(`SELECT * FROM sys_project WHERE (project_slug = ? OR _id = ?) AND active = 1`).get(cleanSlug, slug);
+    // 2. Deduplicate concurrent cold loads
+    if (this._loadingPromises.has(cleanSlug)) {
+      return await this._loadingPromises.get(cleanSlug);
+    }
+
+    const loadPromise = this._loadProjectInternal(cleanSlug, slug).finally(() => {
+      this._loadingPromises.delete(cleanSlug);
+    });
+    this._loadingPromises.set(cleanSlug, loadPromise);
+    return await loadPromise;
+  }
+
+  async _loadProjectInternal(cleanSlug, rawSlug) {
+    // Re-check pool in case another promise just finished
+    if (this.pool.has(cleanSlug)) {
+      return this.pool.get(cleanSlug);
+    }
+
+    const project = this.masterDb.prepare(`SELECT * FROM sys_project WHERE (project_slug = ? OR _id = ?) AND active = 1`).get(cleanSlug, rawSlug);
     if (!project) {
       return null;
     }
@@ -330,34 +356,32 @@ class ProjectManager {
 
       console.log(`⚡ [ProjectManager] Connecting to MySQL project "${project.project_name}" (${project.project_slug})...`);
 
+      const targetDb = mysqlConfig.database || project.db_file;
       const sutram = new MySQLSutram({
         host: mysqlConfig.host || 'localhost',
         port: Number(mysqlConfig.port || 3306),
         user: mysqlConfig.user || 'root',
         password: mysqlConfig.password || '',
-        database: mysqlConfig.database || project.db_file,
+        database: targetDb,
         schema: {}
       });
 
-      const engine = new SutramEngine({ sutram });
-      sutram.connect().then(async () => {
-        try {
-          const introspected = await MySQLIntrospector.introspect(sutram.adapter, mysqlConfig.database || project.db_file);
-          const adopter = new DatabaseAdopter(sutram.adapter);
-          await adopter.adoptAsync(introspected, {
-            username: 'admin',
-            displayName: `${project.project_name} Administrator`
-          });
-          engine.init();
-        } catch (err) {
-          console.warn('⚠️ [ProjectManager] MySQL sync warning:', err.message);
-        }
-      }).catch(connErr => {
-        console.error(`❌ [ProjectManager] Failed to connect to MySQL for "${project.project_slug}":`, connErr.message);
-      });
+      await sutram.connect();
 
-      const excel = new SutramExcel(engine);
-      this._syncExcelRegistrations(engine, excel, true);
+      try {
+        const introspected = await MySQLIntrospector.introspect(sutram.adapter, targetDb);
+        const adopter = new DatabaseAdopter(sutram.adapter);
+        await adopter.adoptAsync(introspected, {
+          username: 'admin',
+          displayName: `${project.project_name} Administrator`
+        });
+      } catch (err) {
+        console.warn('⚠️ [ProjectManager] MySQL sync warning:', err.message);
+      }
+
+      const engine = await new SutramEngine({ sutram, mode: 'managed' }).init();
+      const excel = await new SutramExcel(engine).init();
+      await this._syncExcelRegistrations(engine, excel, true);
 
       const instance = {
         project,
@@ -369,7 +393,7 @@ class ProjectManager {
       return instance;
     }
 
-    // Ensure DB path exists (resolved portably)
+    // ── Handle SQLite Projects ────────────────────────────────
     const resolvedDbPath = this.resolveProjectDbPath(project);
     const dbDir = path.dirname(resolvedDbPath);
     if (!fs.existsSync(dbDir)) {
@@ -378,29 +402,26 @@ class ProjectManager {
 
     console.log(`⚡ [ProjectManager] Loading project "${project.project_name}" (${project.project_slug})...`);
 
-    // 3. Instantiate SutramEngine in Managed Mode
-    const engine = new SutramEngine({ dbPath: resolvedDbPath }).init();
+    const engine = await new SutramEngine({ dbPath: resolvedDbPath, mode: 'managed' }).init();
 
-    // 4. Synchronize any unregistered tables in sqlite_master into sys_table
+    // Synchronize any unregistered physical tables into sys_table
     try {
-      const projectDb = engine.db.db || engine.db;
-      const introspected = SQLiteIntrospector.introspect(projectDb);
-      const adopter = new DatabaseAdopter(projectDb);
+      const introspected = await engine.introspect();
+      const adopter = new DatabaseAdopter(engine.db);
       const adoptRes = adopter.adopt(introspected, {
         username: 'admin',
         displayName: `${project.project_name} Administrator`
       });
       if (adoptRes.adoptedCount > 0) {
         console.log(`⚡ [ProjectManager] Auto-adopted ${adoptRes.adoptedCount} table(s) for "${project.project_name}"`);
-        engine.rebootstrap();
+        await engine.rebootstrap();
       }
     } catch (adoptErr) {
       console.warn('⚠️ [ProjectManager] Table sync warning:', adoptErr.message);
     }
 
-    // 5. Instantiate SutramExcel on top of SutramEngine
-    const excel = new SutramExcel(engine);
-    this._syncExcelRegistrations(engine, excel, true);
+    const excel = await new SutramExcel(engine).init();
+    await this._syncExcelRegistrations(engine, excel, true);
 
     const instance = {
       project,
@@ -455,7 +476,7 @@ class ProjectManager {
    * Creates a brand new isolated project database, or adopts an uploaded SQLite database.
    * Configures initial project administrator and registers it in the master DB.
    */
-  createProject({
+  async createProject({
     name,
     description = '',
     password = '',
@@ -490,110 +511,112 @@ class ProjectManager {
 
     // ── MySQL Project Creation / Adoption ──────────────────────
     if (db_type === 'mysql' || dbSource === 'mysql' || mysql_config) {
-      return (async () => {
-        const config = mysql_config || {};
-        const { MySQLAdapter, MySQLIntrospector, MySQLSutram } = require('../../packages/sutramcore-mysql');
+      const config = mysql_config || {};
+      const { MySQLAdapter, MySQLIntrospector, MySQLSutram } = require('../../packages/sutramcore-mysql');
 
-        const targetHost = config.host || 'localhost';
-        const targetPort = Number(config.port || 3306);
-        const targetUser = config.user || 'root';
-        const targetPass = config.password || '';
-        const targetDb = config.database || slug;
+      const targetHost = config.host || 'localhost';
+      const targetPort = Number(config.port || 3306);
+      const targetUser = config.user || 'root';
+      const targetPass = config.password || '';
+      const targetDb = config.database || slug;
 
-        // If requested to clone an existing database on MySQL server
-        if (config.clone && config.clone_source_db) {
-          const sourceDb = config.clone_source_db;
-          adopterLogs.push(`[CLONE] Cloning MySQL database "${sourceDb}" into "${targetDb}"...`);
-          try {
-            const rootAdapter = new MySQLAdapter({ host: targetHost, port: targetPort, user: targetUser, password: targetPass, database: 'mysql' });
-            await rootAdapter.connect();
-            const cloneResult = await MySQLIntrospector.cloneDatabase(rootAdapter, sourceDb, targetDb);
-            await rootAdapter.close();
-            adopterLogs.push(`[CLONE] Successfully cloned ${cloneResult.clonedTables} table(s) into \`${targetDb}\`.`);
-          } catch (cloneErr) {
-            console.error('[ProjectManager] Clone DB error:', cloneErr.message);
-            throw new Error(`Failed to clone database "${sourceDb}" to "${targetDb}": ${cloneErr.message}`);
-          }
-        } else if (config.create_if_missing) {
-          try {
-            const rootAdapter = new MySQLAdapter({ host: targetHost, port: targetPort, user: targetUser, password: targetPass, database: 'mysql' });
-            await rootAdapter.connect();
-            await rootAdapter.run(`CREATE DATABASE IF NOT EXISTS \`${targetDb}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
-            await rootAdapter.close();
-            adopterLogs.push(`[INIT] Verified/Created MySQL database: \`${targetDb}\``);
-          } catch (createErr) {
-            console.warn('[ProjectManager] Create DB notice:', createErr.message);
-          }
+      // If requested to clone an existing database on MySQL server
+      if (config.clone && config.clone_source_db) {
+        const sourceDb = config.clone_source_db;
+        adopterLogs.push(`[CLONE] Cloning MySQL database "${sourceDb}" into "${targetDb}"...`);
+        try {
+          const rootAdapter = new MySQLAdapter({ host: targetHost, port: targetPort, user: targetUser, password: targetPass, database: 'mysql' });
+          await rootAdapter.connect();
+          const cloneResult = await MySQLIntrospector.cloneDatabase(rootAdapter, sourceDb, targetDb);
+          await rootAdapter.close();
+          adopterLogs.push(`[CLONE] Successfully cloned ${cloneResult.clonedTables} table(s) into \`${targetDb}\`.`);
+        } catch (cloneErr) {
+          console.error('[ProjectManager] Clone DB error:', cloneErr.message);
+          throw new Error(`Failed to clone database "${sourceDb}" to "${targetDb}": ${cloneErr.message}`);
         }
-
-        // Connect to target database
-        adopterLogs.push(`[CONNECT] Connecting to MySQL database \`${targetDb}\` on ${targetHost}:${targetPort}...`);
-        const sutram = new MySQLSutram({ host: targetHost, port: targetPort, user: targetUser, password: targetPass, database: targetDb, schema: {} });
-        await sutram.connect();
-
-        // Introspect and Adopt
-        const introspected = await MySQLIntrospector.introspect(sutram.adapter, targetDb);
-        const adopter = new DatabaseAdopter(sutram.adapter);
-        await adopter.adoptAsync(introspected, {
-          username: cleanAdminUser,
-          password: cleanAdminPass,
-          displayName: `${cleanName} Administrator`
-        }, (step, msg) => {
-          adopterLogs.push(`[${step}] ${msg}`);
-        });
-
-        // Initialize Engine & Excel
-        const engine = new SutramEngine({ sutram }).init();
-        const excel = new SutramExcel(engine);
-        this._syncExcelRegistrations(engine, excel, true);
-
-        // Register in Master DB
-        const serializedConfig = JSON.stringify({
-          host: targetHost,
-          port: targetPort,
-          user: targetUser,
-          password: targetPass,
-          database: targetDb
-        });
-
-        const insertProj = this.masterDb.prepare(`
-          INSERT INTO sys_project (
-            project_name, project_slug, db_file, db_path, description, color, icon, owner_username, db_type, db_config, active
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'mysql', ?, 1)
-        `).run(
-          cleanName,
-          slug,
-          targetDb,
-          `mysql://${targetHost}:${targetPort}/${targetDb}`,
-          description ? String(description).trim() : '',
-          color || '#3b82f6',
-          icon || 'pi pi-server',
-          createdBy || 'admin',
-          serializedConfig
-        );
-
-        const projectId = insertProj.lastInsertRowid;
-        const masterUser = this.masterDb.prepare(`SELECT _id FROM sys_master_user WHERE username = ?`).get(createdBy || 'admin');
-        if (masterUser) {
-          this.masterDb.prepare(`
-            INSERT OR IGNORE INTO sys_project_access (user_id, project_id, access_role)
-            VALUES (?, ?, 'owner')
-          `).run(masterUser._id, projectId);
+      } else if (config.create_if_missing) {
+        try {
+          const rootAdapter = new MySQLAdapter({ host: targetHost, port: targetPort, user: targetUser, password: targetPass, database: 'mysql' });
+          await rootAdapter.connect();
+          await rootAdapter.run(`CREATE DATABASE IF NOT EXISTS \`${targetDb}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+          await rootAdapter.close();
+          adopterLogs.push(`[INIT] Verified/Created MySQL database: \`${targetDb}\``);
+        } catch (createErr) {
+          console.warn('[ProjectManager] Create DB notice:', createErr.message);
         }
+      }
 
-        const newProject = this.masterDb.prepare(`SELECT * FROM sys_project WHERE _id = ?`).get(projectId);
-        const instance = { project: newProject, engine, excel, lastUsed: Date.now() };
-        this.pool.set(slug, instance);
+      // Connect to target database
+      adopterLogs.push(`[CONNECT] Connecting to MySQL database \`${targetDb}\` on ${targetHost}:${targetPort}...`);
+      const sutram = new MySQLSutram({ host: targetHost, port: targetPort, user: targetUser, password: targetPass, database: targetDb, schema: {} });
+      await sutram.connect();
 
-        adopterLogs.push(`[SUCCESS] MySQL Project "${cleanName}" (${targetDb}) successfully initialized.`);
-        return {
-          success: true,
-          project: newProject,
-          logs: adopterLogs,
-          message: `MySQL Project "${cleanName}" created and ready.`
-        };
-      })();
+      // Introspect and Adopt
+      const introspected = await MySQLIntrospector.introspect(sutram.adapter, targetDb);
+      const adopter = new DatabaseAdopter(sutram.adapter);
+      await adopter.adoptAsync(introspected, {
+        username: cleanAdminUser,
+        password: cleanAdminPass,
+        displayName: `${cleanName} Administrator`
+      }, (step, msg) => {
+        adopterLogs.push(`[${step}] ${msg}`);
+      });
+
+      // Initialize Engine & Excel (Managed Mode, Uniform Async Contract)
+      const engine = await new SutramEngine({ sutram, mode: 'managed' }).init();
+      const excel = await new SutramExcel(engine).init();
+      await this._syncExcelRegistrations(engine, excel, true);
+
+      // Register in Master DB
+      const serializedConfig = JSON.stringify({
+        host: targetHost,
+        port: targetPort,
+        user: targetUser,
+        password: targetPass,
+        database: targetDb
+      });
+
+      const insertProj = this.masterDb.prepare(`
+        INSERT INTO sys_project (
+          project_name, project_slug, db_file, db_path, description, color, icon, owner_username, db_type, db_config, active
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'mysql', ?, 1)
+      `).run(
+        cleanName,
+        slug,
+        targetDb,
+        `mysql://${targetHost}:${targetPort}/${targetDb}`,
+        description ? String(description).trim() : '',
+        color || '#3b82f6',
+        icon || 'pi pi-server',
+        createdBy || 'admin',
+        serializedConfig
+      );
+
+      const projectId = insertProj.lastInsertRowid;
+      const masterUser = this.masterDb.prepare(`SELECT _id FROM sys_master_user WHERE username = ?`).get(createdBy || 'admin');
+      if (masterUser) {
+        this.masterDb.prepare(`
+          INSERT OR IGNORE INTO sys_project_access (user_id, project_id, access_role)
+          VALUES (?, ?, 'owner')
+        `).run(masterUser._id, projectId);
+      }
+
+      const newProject = this.masterDb.prepare(`SELECT * FROM sys_project WHERE _id = ?`).get(projectId);
+      const instance = { project: newProject, engine, excel, lastUsed: Date.now() };
+      this.pool.set(slug, instance);
+
+      adopterLogs.push(`[SUCCESS] MySQL Project "${cleanName}" (${targetDb}) successfully initialized.`);
+      return {
+        success: true,
+        project: newProject,
+        logs: adopterLogs,
+        message: `MySQL Project "${cleanName}" created and ready.`
+      };
     }
+
+    // ── SQLite Project Creation / Adoption ─────────────────────
+    const dbFilename = `${slug}.db`;
+    const targetDbPath = path.join(this.projectsDir, dbFilename);
 
     if (dbSource === 'upload' && tempDbFile) {
       if (!fs.existsSync(tempDbFile)) {
@@ -630,19 +653,16 @@ class ProjectManager {
     }
 
     // 1. Initialize engine instance (runs SysMigrator and loads schema)
-    const engine = new SutramEngine({ dbPath: targetDbPath }).init();
+    const engine = await new SutramEngine({ dbPath: targetDbPath, mode: 'managed' }).init();
 
     // 2. Configure In-Project Administrator in project's sys_user table
-    const projectDb = engine.db.db || engine.db;
-    projectDb.prepare(`
-      INSERT INTO sys_user (username, password, display_name, role, active)
-      VALUES (?, ?, ?, 'admin', 1)
-      ON CONFLICT(username) DO UPDATE SET
-        password = excluded.password,
-        display_name = excluded.display_name,
-        role = 'admin',
-        active = 1
-    `).run(cleanAdminUser, cleanAdminPass, `${cleanName} Administrator`);
+    await engine.upsert('sys_user', ['username'], {
+      username: cleanAdminUser,
+      password: cleanAdminPass,
+      display_name: `${cleanName} Administrator`,
+      role: 'admin',
+      active: 1
+    });
     adopterLogs.push(`[USER] Project administrator configured (${cleanAdminUser}).`);
 
     // 3. Register project in Master DB (using portable relative path)
@@ -673,10 +693,10 @@ class ProjectManager {
       `).run(masterUser._id, projectId);
     }
 
-    // 5. Instantiate SutramExcel
+    // 5. Instantiate SutramExcel strictly on top of SutramEngine
     adopterLogs.push('[EXCEL] Initializing SutramExcel dictionary & reference matcher...');
-    const excel = new SutramExcel(engine);
-    this._syncExcelRegistrations(engine, excel, true);
+    const excel = await new SutramExcel(engine).init();
+    await this._syncExcelRegistrations(engine, excel, true);
 
     const newProject = this.masterDb.prepare(`SELECT * FROM sys_project WHERE _id = ?`).get(projectId);
 
@@ -739,7 +759,7 @@ class ProjectManager {
     let purgedCount = 0;
     if (purge) {
       try {
-        const instance = this.getProject(slug);
+        const instance = await this.getProject(slug);
         if (instance?.engine && typeof instance.engine.purgeSutram === 'function') {
           const res = await instance.engine.purgeSutram();
           purgedCount = res?.purgedCount || 0;
@@ -747,6 +767,12 @@ class ProjectManager {
       } catch (purgeErr) {
         console.warn(`⚠️ [ProjectManager] Error during purge for "${slug}":`, purgeErr.message);
       }
+    }
+
+    // Close active engine core connection if pooled
+    const cached = this.pool.get(slug);
+    if (cached?.engine?.core && typeof cached.engine.core.close === 'function') {
+      try { await cached.engine.core.close(); } catch {}
     }
 
     this.masterDb.prepare(`UPDATE sys_project SET active = 0, updated_at = datetime('now', 'localtime') WHERE _id = ?`).run(existing._id);
@@ -773,9 +799,9 @@ class ProjectManager {
   /**
    * Sets active project database connection
    */
-  setActiveProject(slug) {
+  async setActiveProject(slug) {
     if (!slug) return null;
-    const project = this.getProject(slug);
+    const project = await this.getProject(slug);
     if (!project) {
       throw new Error(`Project "${slug}" not found`);
     }
@@ -787,9 +813,9 @@ class ProjectManager {
   /**
    * Returns current active project instance
    */
-  getActiveProject() {
+  async getActiveProject() {
     const slug = this.activeProjectSlug || this.getDefaultProjectSlug();
-    return this.getProject(slug);
+    return await this.getProject(slug);
   }
 
   // ─────────────────────────────────────────────────────────────

@@ -32,13 +32,13 @@ const projectManager = new ProjectManager({
 });
 
 // Helper to resolve active project instance from request query, headers, or server active project
-function getActiveProject(req) {
+async function getActiveProject(req) {
   const slug = req?.query?.project
     || req?.headers?.['x-project-slug']
     || req?.headers?.['x-project-id']
     || projectManager.activeProjectSlug
     || projectManager.getDefaultProjectSlug();
-  const instance = projectManager.getProject(slug);
+  const instance = await projectManager.getProject(slug);
   if (!instance) {
     throw new Error(`Project "${slug || 'default'}" not found`);
   }
@@ -46,6 +46,12 @@ function getActiveProject(req) {
     projectManager.activeProjectSlug = instance.project.project_slug;
   }
   return instance;
+}
+
+function nowTimestampStr() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 // 2. Create Express Application
@@ -225,9 +231,9 @@ masterRouter.post('/projects/mysql/inspect', async (req, res) => {
  * GET /api/_sutram/master/projects/:slug
  * Retrieves project details
  */
-masterRouter.get('/projects/:slug', (req, res) => {
+masterRouter.get('/projects/:slug', async (req, res) => {
   try {
-    const instance = projectManager.getProject(req.params.slug);
+    const instance = await projectManager.getProject(req.params.slug);
     if (!instance) {
       return res.status(404).json({ success: false, error: `Project "${req.params.slug}" not found` });
     }
@@ -268,9 +274,9 @@ masterRouter.delete('/projects/:slug', async (req, res) => {
  * POST /api/_sutram/master/projects/switch/:slug
  * Instantly switches server active database connection to this project
  */
-masterRouter.post('/projects/switch/:slug', (req, res) => {
+masterRouter.post('/projects/switch/:slug', async (req, res) => {
   try {
-    const instance = projectManager.setActiveProject(req.params.slug);
+    const instance = await projectManager.setActiveProject(req.params.slug);
     res.json({
       success: true,
       message: `Active project connection switched to "${instance.project.project_name}" (${instance.project.project_slug})`,
@@ -285,9 +291,9 @@ masterRouter.post('/projects/switch/:slug', (req, res) => {
  * GET /api/_sutram/master/projects/active
  * Returns current active project info
  */
-masterRouter.get('/projects/active', (req, res) => {
+masterRouter.get('/projects/active', async (req, res) => {
   try {
-    const instance = projectManager.getActiveProject();
+    const instance = await projectManager.getActiveProject();
     res.json({
       success: true,
       activeProject: instance.project
@@ -373,9 +379,9 @@ masterRouter.post('/login', (req, res) => {
  * GET /api/_sutram/master/projects/:slug/access
  * Returns users with access to a project
  */
-masterRouter.get('/projects/:slug/access', (req, res) => {
+masterRouter.get('/projects/:slug/access', async (req, res) => {
   try {
-    const instance = projectManager.getProject(req.params.slug);
+    const instance = await projectManager.getProject(req.params.slug);
     if (!instance) return res.status(404).json({ success: false, error: 'Project not found' });
     const members = projectManager.getProjectAccess(instance.project._id);
     res.json({ success: true, count: members.length, result: members });
@@ -388,9 +394,9 @@ masterRouter.get('/projects/:slug/access', (req, res) => {
  * POST /api/_sutram/master/projects/:slug/access
  * Grants project access to a master user
  */
-masterRouter.post('/projects/:slug/access', (req, res) => {
+masterRouter.post('/projects/:slug/access', async (req, res) => {
   try {
-    const instance = projectManager.getProject(req.params.slug);
+    const instance = await projectManager.getProject(req.params.slug);
     if (!instance) return res.status(404).json({ success: false, error: 'Project not found' });
     const { userId, accessRole } = req.body;
     projectManager.grantProjectAccess(userId, instance.project._id, accessRole || 'member');
@@ -404,9 +410,9 @@ masterRouter.post('/projects/:slug/access', (req, res) => {
  * DELETE /api/_sutram/master/projects/:slug/access/:userId
  * Revokes project access from a master user
  */
-masterRouter.delete('/projects/:slug/access/:userId', (req, res) => {
+masterRouter.delete('/projects/:slug/access/:userId', async (req, res) => {
   try {
-    const instance = projectManager.getProject(req.params.slug);
+    const instance = await projectManager.getProject(req.params.slug);
     if (!instance) return res.status(404).json({ success: false, error: 'Project not found' });
     projectManager.revokeProjectAccess(req.params.userId, instance.project._id);
     res.json({ success: true, message: 'Access revoked successfully' });
@@ -429,9 +435,10 @@ const authRouter = express.Router();
  * POST /api/_sutram/schema/create-table
  * Dynamically creates a table in the active project database and updates sys_ tables
  */
-schemaRouter.post('/create-table', (req, res) => {
+schemaRouter.post('/create-table', async (req, res) => {
   try {
-    const { engine, excel } = getActiveProject(req);
+    const activeProjectInfo = await getActiveProject(req);
+    const { engine, excel } = activeProjectInfo;
     const { table_name, label, description, columns, joins } = req.body;
     if (!table_name) {
       return res.status(400).json({ success: false, error: 'table_name is required' });
@@ -440,20 +447,21 @@ schemaRouter.post('/create-table', (req, res) => {
       return res.status(400).json({ success: false, error: 'At least one column is required' });
     }
 
-    console.log(`[sutramServer] Creating dynamic table "${table_name}" in project "${engine.db.name || 'active'}"...`);
-    engine.schema.createTable({ table_name, label, description, columns, joins });
+    const projectName = engine.dbName || activeProjectInfo.project?.project_name || req.activeProjectSlug || 'active';
+    console.log(`[sutramServer] Creating dynamic table "${table_name}" in project "${projectName}"...`);
+    await engine.schema.createTable({ table_name, label, description, columns, joins });
 
     // Auto-set UI metadata if label provided
     if (label) {
       try {
-        engine.ui.setTableUi(table_name, { display_name: label, icon: 'pi pi-table' });
+        await engine.ui.setTableUi(table_name, { display_name: label, icon: 'pi pi-table' });
       } catch (e) {
         console.warn('[sutramServer] Notice: UiManager setTableUi warning:', e.message);
       }
     }
 
     // Auto-register the newly created table in Excel Studio with fresh schema derivation
-    projectManager._syncExcelRegistrations(engine, excel, true);
+    await projectManager._syncExcelRegistrations(engine, excel, true);
 
     res.json({
       success: true,
@@ -474,31 +482,28 @@ schemaRouter.post('/create-table', (req, res) => {
  * GET /api/_sutram/schema/table-detail/:tableName
  * Returns full table schema, columns, row count, and incoming FK references for Edit/Delete
  */
-schemaRouter.get('/table-detail/:tableName', (req, res) => {
+schemaRouter.get('/table-detail/:tableName', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
+    const { engine } = await getActiveProject(req);
     const tableName = req.params.tableName;
-    const detail = engine.schema.getTableDetail(tableName);
-    const impact = engine.schema.getTableImpact(tableName);
-    const ui = (engine.ui && engine.ui.getTableSchema) ? engine.ui.getTableSchema(tableName) : null;
+    const detail = await engine.schema.getTableDetail(tableName);
+    const impact = await engine.schema.getTableImpact(tableName);
+    const ui = (engine.ui && engine.ui.getTableSchema) ? await engine.ui.getTableSchema(tableName) : null;
 
-    // Enrich columns with physical PRAGMA table_info (exact SQL type, notnull, default)
-    const db = engine.db.db || engine.db;
-    const pragmaCols = db.prepare(`PRAGMA table_info("${tableName}")`).all();
-    const pragmaMap = new Map(pragmaCols.map(p => [p.name, p]));
-    const pragmaIndexes = db.prepare(`PRAGMA index_list("${tableName}")`).all();
+    // Enrich columns cleanly via Core inspectTable (SQLite PRAGMA / MySQL information_schema)
+    const inspected = await engine.inspectTable(tableName);
+    const physMap = new Map((inspected.columns || []).map(p => [p.name, p]));
     const uniqueCols = new Set();
     const indexedCols = new Set();
-    for (const idx of pragmaIndexes) {
-      const info = db.prepare(`PRAGMA index_info("${idx.name}")`).all();
-      for (const ic of info) {
-        indexedCols.add(ic.name);
-        if (idx.unique) uniqueCols.add(ic.name);
+    for (const idx of (inspected.indexes || [])) {
+      for (const colName of (idx.columns || [])) {
+        indexedCols.add(colName);
+        if (idx.unique) uniqueCols.add(colName);
       }
     }
 
     const enrichedColumns = (detail.columns || []).map(c => {
-      const pInfo = pragmaMap.get(c.column_name);
+      const pInfo = physMap.get(c.column_name);
       let refSelect = [];
       if (c.ref_select) {
         try {
@@ -535,26 +540,26 @@ schemaRouter.get('/table-detail/:tableName', (req, res) => {
 
 /**
  * PUT /api/_sutram/schema/tables/:tableName
- * Updates an existing table using 2-Tier Hybrid Strategy (Fast In-Place or Atomic Shadow Rebuild)
+ * Updates an existing table using Core physical DDL
  */
-schemaRouter.put('/tables/:tableName', (req, res) => {
+schemaRouter.put('/tables/:tableName', async (req, res) => {
   try {
-    const { engine, excel } = getActiveProject(req);
+    const { engine, excel } = await getActiveProject(req);
     const tableName = req.params.tableName;
     const { label, description, columns } = req.body;
 
     console.log(`[sutramServer] Updating table "${tableName}"...`);
-    const result = engine.schema.updateTable(tableName, { label, description, columns });
+    const result = await engine.schema.updateTable(tableName, { label, description, columns });
 
     if (label) {
       try {
-        engine.ui.setTableUi(tableName, { display_name: label, icon: 'pi pi-table' });
+        await engine.ui.setTableUi(tableName, { display_name: label, icon: 'pi pi-table' });
       } catch (e) {
         console.warn('[sutramServer] Notice: UiManager setTableUi warning:', e.message);
       }
     }
 
-    projectManager._syncExcelRegistrations(engine, excel, true);
+    await projectManager._syncExcelRegistrations(engine, excel, true);
 
     res.json({
       success: true,
@@ -571,14 +576,14 @@ schemaRouter.put('/tables/:tableName', (req, res) => {
  * DELETE /api/_sutram/schema/tables/:tableName
  * Safely drops a user table and cleans up metadata & Excel registration
  */
-schemaRouter.delete('/tables/:tableName', (req, res) => {
+schemaRouter.delete('/tables/:tableName', async (req, res) => {
   try {
-    const { engine, excel } = getActiveProject(req);
+    const { engine, excel } = await getActiveProject(req);
     const tableName = req.params.tableName;
 
     console.log(`[sutramServer] Dropping table "${tableName}"...`);
-    engine.schema.dropTable(tableName);
-    projectManager._syncExcelRegistrations(engine, excel, true);
+    await engine.schema.dropTable(tableName);
+    await projectManager._syncExcelRegistrations(engine, excel, true);
 
     res.json({
       success: true,
@@ -594,21 +599,22 @@ schemaRouter.delete('/tables/:tableName', (req, res) => {
  * GET /api/_sutram/schema/tables
  * Returns all active user tables for the active project
  */
-schemaRouter.get('/tables', (req, res) => {
+schemaRouter.get('/tables', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
-    const tables = Object.keys(engine._schema || {})
-      .filter(t => !t.startsWith('sys_') && !t.startsWith('sqlite_'))
-      .map(t => {
-        const schema = engine._schema[t];
-        const ui = (engine.ui && engine.ui.getTableSchema) ? engine.ui.getTableSchema(t) : null;
-        return {
-          table_name: t,
-          display_name: ui?.display_name || t,
-          columns: schema?.columns || {},
-          joins: schema?.joins || {}
-        };
+    const { engine } = await getActiveProject(req);
+    const tableNames = Object.keys(engine._schema || {})
+      .filter(t => !t.startsWith('sys_') && !t.startsWith('xls_') && !t.startsWith('sqlite_'));
+    const tables = [];
+    for (const t of tableNames) {
+      const schema = engine._schema[t];
+      const ui = (engine.ui && engine.ui.getTableSchema) ? await engine.ui.getTableSchema(t) : null;
+      tables.push({
+        table_name: t,
+        display_name: ui?.display_name || t,
+        columns: schema?.columns || {},
+        joins: schema?.joins || {}
       });
+    }
     res.json({ success: true, count: tables.length, result: tables });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -619,32 +625,33 @@ schemaRouter.get('/tables', (req, res) => {
  * GET /api/_sutram/schema/catalog
  * Rich catalog for Table Designer & Foreign Key multi-display mapping
  */
-schemaRouter.get('/catalog', (req, res) => {
+schemaRouter.get('/catalog', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
-    const tables = Object.keys(engine._schema || {})
-      .filter(t => !t.startsWith('sys_') && !t.startsWith('sqlite_'))
-      .map(t => {
-        const schema = engine._schema[t];
-        const ui = (engine.ui && engine.ui.getTableSchema) ? engine.ui.getTableSchema(t) : null;
-        const cols = Object.keys(schema?.columns || {}).map(cName => {
-          const colDef = schema.columns[cName];
-          return {
-            column_name: cName,
-            label: colDef?.label || cName,
-            type: colDef?.type || 'string',
-            is_pk: cName === '_id' || colDef?.is_pk === 1,
-            ref: colDef?.ref || null
-          };
-        });
-        const candidateDisplays = SchemaHeuristics.inferCandidateDisplayColumns(cols);
+    const { engine } = await getActiveProject(req);
+    const tableNames = Object.keys(engine._schema || {})
+      .filter(t => !t.startsWith('sys_') && !t.startsWith('xls_') && !t.startsWith('sqlite_'));
+    const tables = [];
+    for (const t of tableNames) {
+      const schema = engine._schema[t];
+      const ui = (engine.ui && engine.ui.getTableSchema) ? await engine.ui.getTableSchema(t) : null;
+      const cols = Object.keys(schema?.columns || {}).map(cName => {
+        const colDef = schema.columns[cName];
         return {
-          table_name: t,
-          display_name: ui?.display_name || t,
-          columns: cols,
-          candidate_display_columns: candidateDisplays
+          column_name: cName,
+          label: colDef?.label || cName,
+          type: colDef?.type || 'string',
+          is_pk: cName === '_id' || colDef?.is_pk === 1,
+          ref: colDef?.ref || null
         };
       });
+      const candidateDisplays = SchemaHeuristics.inferCandidateDisplayColumns(cols);
+      tables.push({
+        table_name: t,
+        display_name: ui?.display_name || t,
+        columns: cols,
+        candidate_display_columns: candidateDisplays
+      });
+    }
     res.json({ success: true, count: tables.length, result: tables });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -654,15 +661,15 @@ schemaRouter.get('/catalog', (req, res) => {
 /**
  * GET /api/_sutram/schema/reports
  */
-schemaRouter.get('/reports', (req, res) => {
+schemaRouter.get('/reports', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
+    const { engine } = await getActiveProject(req);
     const reports = [];
 
     // 1. From sys_report via engine.report
     try {
       if (engine && engine.report && typeof engine.report.getReports === 'function') {
-        const sysReps = engine.report.getReports();
+        const sysReps = await engine.report.getReports();
         for (const r of sysReps) {
           if (r.active !== 0) {
             reports.push({
@@ -679,24 +686,19 @@ schemaRouter.get('/reports', (req, res) => {
           }
         }
       }
-    } catch (e) {
-      // sys_report uninitialized
-    }
+    } catch {}
 
-    // 2. Discover live SQL Views from active DB
+    // 2. Discover live SQL Views via Core listViews
     try {
-      const db = engine.db.db || engine.db;
-      if (db && typeof db.prepare === 'function') {
-        const views = db.prepare(
-          `SELECT name FROM sqlite_master WHERE type = 'view' AND name NOT LIKE 'sys_%' AND name NOT LIKE 'sqlite_%'`
-        ).all();
-        for (const v of views) {
-          if (!reports.some(r => r.id === v.name)) {
+      if (engine && typeof engine.getViews === 'function') {
+        const views = await engine.getViews();
+        for (const vName of views) {
+          if (!reports.some(r => r.id === vName)) {
             reports.push({
-              id: v.name,
-              table: v.name,
-              display_name: v.name,
-              title: v.name,
+              id: vName,
+              table: vName,
+              display_name: vName,
+              title: vName,
               desc: 'Live Database SQL View',
               icon: 'pi-chart-bar',
               category: 'Database Views',
@@ -734,9 +736,9 @@ schemaRouter.post('/infer-column', (req, res) => {
 /**
  * POST /api/_sutram/schema/preview-sql
  */
-schemaRouter.post('/preview-sql', (req, res) => {
+schemaRouter.post('/preview-sql', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
+    const { engine } = await getActiveProject(req);
     const { table_name, columns } = req.body;
     if (!table_name) {
       return res.status(400).json({ success: false, error: 'table_name required' });
@@ -751,16 +753,14 @@ schemaRouter.post('/preview-sql', (req, res) => {
 /**
  * GET /api/_sutram/schema/table-config/:table
  */
-schemaRouter.get('/table-config/:table', (req, res) => {
+schemaRouter.get('/table-config/:table', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
+    const { engine } = await getActiveProject(req);
     const tbl = req.params.table;
-    const db = engine.db.db || engine.db;
-    
-    const row = db.prepare(`SELECT value FROM sys_meta WHERE key = ?`).get(`table_ui_config:${tbl}`);
-    if (row && row.value) {
+    const raw = await engine.getMeta(`table_ui_config:${tbl}`);
+    if (raw) {
       try {
-        const savedConfig = JSON.parse(row.value);
+        const savedConfig = typeof raw === 'string' ? JSON.parse(raw) : raw;
         return res.json({ success: true, result: savedConfig });
       } catch {}
     }
@@ -773,26 +773,22 @@ schemaRouter.get('/table-config/:table', (req, res) => {
 /**
  * POST /api/_sutram/schema/table-config/:table
  */
-schemaRouter.post('/table-config/:table', (req, res) => {
+schemaRouter.post('/table-config/:table', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
+    const { engine } = await getActiveProject(req);
     const tbl = req.params.table;
     const { display_name, columns = [], selected_keys = [] } = req.body;
-    const db = engine.db.db || engine.db;
 
-    db.prepare(`
-      INSERT INTO sys_meta (key, value) VALUES (?, ?)
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value
-    `).run(`table_ui_config:${tbl}`, JSON.stringify({
+    await engine.setMeta(`table_ui_config:${tbl}`, {
       table_name: tbl,
       display_name,
       columns,
       selected_keys,
       updated_at: new Date().toISOString()
-    }));
+    });
 
     if (display_name && engine.ui?.setTableUi) {
-      try { engine.ui.setTableUi(tbl, { display_name }); } catch {}
+      try { await engine.ui.setTableUi(tbl, { display_name }); } catch {}
     }
     if (Array.isArray(columns) && engine.ui?.setColumnUi) {
       for (let i = 0; i < columns.length; i++) {
@@ -800,7 +796,7 @@ schemaRouter.post('/table-config/:table', (req, res) => {
         const colName = col.col_name || col.column_name || col.name || col.key;
         if (!colName) continue;
         try {
-          engine.ui.setColumnUi(tbl, colName, {
+          await engine.ui.setColumnUi(tbl, colName, {
             label: col.label,
             field_type: col.field_type || col.type || 'text',
             display_format: col.display_format || col.format || null,
@@ -819,19 +815,18 @@ schemaRouter.post('/table-config/:table', (req, res) => {
 /**
  * GET /api/_sutram/schema/triggers/:table
  */
-schemaRouter.get('/triggers/:table', (req, res) => {
+schemaRouter.get('/triggers/:table', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
+    const { engine } = await getActiveProject(req);
     const tbl = req.params.table;
     let triggers = [];
     const triggerMgr = engine.trigger || engine.triggers;
     if (triggerMgr && typeof triggerMgr.getTriggers === 'function') {
-      const allTriggers = triggerMgr.getTriggers();
+      const allTriggers = await triggerMgr.getTriggers();
       triggers = allTriggers.filter(t => t.source_table === tbl);
       for (const t of triggers) {
         try {
-          const db = engine.db.db || engine.db;
-          t.actions = db.prepare(`SELECT * FROM sys_trigger_action WHERE trigger_id = ? ORDER BY sort_order ASC`).all(t._id);
+          t.actions = await triggerMgr.getActions(t._id);
         } catch {}
       }
     }
@@ -844,9 +839,9 @@ schemaRouter.get('/triggers/:table', (req, res) => {
 /**
  * POST /api/_sutram/schema/triggers
  */
-schemaRouter.post('/triggers', (req, res) => {
+schemaRouter.post('/triggers', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
+    const { engine } = await getActiveProject(req);
     const def = req.body;
     const triggerMgr = engine.trigger || engine.triggers;
     if (!triggerMgr || typeof triggerMgr.create !== 'function') {
@@ -861,7 +856,7 @@ schemaRouter.post('/triggers', (req, res) => {
         field_map: def.field_map || {}
       }];
     }
-    const id = triggerMgr.create(def);
+    const id = await triggerMgr.create(def);
     res.json({ success: true, message: `Trigger "${def.trigger_name}" created`, triggerId: id });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -871,13 +866,13 @@ schemaRouter.post('/triggers', (req, res) => {
 /**
  * DELETE /api/_sutram/schema/triggers/:id
  */
-schemaRouter.delete('/triggers/:id', (req, res) => {
+schemaRouter.delete('/triggers/:id', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
+    const { engine } = await getActiveProject(req);
     const id = req.params.id;
     const triggerMgr = engine.trigger || engine.triggers;
     if (triggerMgr && typeof triggerMgr.delete === 'function') {
-      triggerMgr.delete(id);
+      await triggerMgr.delete(id);
     }
     res.json({ success: true, message: `Trigger ${id} deleted` });
   } catch (err) {
@@ -888,13 +883,12 @@ schemaRouter.delete('/triggers/:id', (req, res) => {
 /**
  * GET /api/_sutram/schema/ui-sutras/:table
  */
-schemaRouter.get('/ui-sutras/:table', (req, res) => {
+schemaRouter.get('/ui-sutras/:table', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
+    const { engine } = await getActiveProject(req);
     const tbl = req.params.table;
-    const db = engine.db.db || engine.db;
-    const row = db.prepare(`SELECT value FROM sys_meta WHERE key = ?`).get(`ui_sutras:${tbl}`);
-    const formulas = row ? JSON.parse(row.value) : [];
+    const raw = await engine.getMeta(`ui_sutras:${tbl}`);
+    const formulas = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : [];
     res.json({ success: true, result: formulas });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -904,16 +898,12 @@ schemaRouter.get('/ui-sutras/:table', (req, res) => {
 /**
  * POST /api/_sutram/schema/ui-sutras/:table
  */
-schemaRouter.post('/ui-sutras/:table', (req, res) => {
+schemaRouter.post('/ui-sutras/:table', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
+    const { engine } = await getActiveProject(req);
     const tbl = req.params.table;
     const { formulas = [] } = req.body;
-    const db = engine.db.db || engine.db;
-    db.prepare(`
-      INSERT INTO sys_meta (key, value) VALUES (?, ?)
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value
-    `).run(`ui_sutras:${tbl}`, JSON.stringify(formulas));
+    await engine.setMeta(`ui_sutras:${tbl}`, formulas);
     res.json({ success: true, message: `UI Sutras saved for "${tbl}"` });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -924,48 +914,27 @@ schemaRouter.post('/ui-sutras/:table', (req, res) => {
 // 5. In-Project Users & Author/Admin Roles (Project Database Level)
 // ─────────────────────────────────────────────────────────────
 
-function ensureUserColumns(db) {
+async function ensureUserColumns(engine) {
   try {
-    db.prepare(`
-      CREATE TABLE IF NOT EXISTS sys_user (
-        _id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL,
-        display_name TEXT,
-        role TEXT DEFAULT 'author',
-        active INTEGER DEFAULT 1,
-        can_ocr INTEGER DEFAULT 1,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-      )
-    `).run();
-
-    db.prepare(`
-      CREATE TABLE IF NOT EXISTS sys_user_rights (
-        _id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        table_name TEXT NOT NULL,
-        can_view INTEGER DEFAULT 1,
-        can_edit INTEGER DEFAULT 1,
-        can_delete INTEGER DEFAULT 1,
-        can_unmask INTEGER DEFAULT 0,
-        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(user_id, table_name)
-      )
-    `).run();
-
-    const cols = db.prepare(`PRAGMA table_info(sys_user)`).all();
-    const hasOcr = cols.some(c => c.name === 'can_ocr');
+    const inspected = await engine.inspectTable('sys_user');
+    const hasOcr = (inspected.columns || []).some(c => c.name === 'can_ocr');
     if (!hasOcr) {
-      db.prepare(`ALTER TABLE sys_user ADD COLUMN can_ocr INTEGER DEFAULT 1`).run();
+      try {
+        await engine.core.addColumn('sys_user', {
+          column_name: 'can_ocr',
+          col_type: 'boolean',
+          sql_type: 'TINYINT',
+          default_value: '1'
+        });
+      } catch {}
     }
 
-    const userCount = db.prepare(`SELECT COUNT(*) as count FROM sys_user`).get()?.count || 0;
+    const row = await engine.queryOne(`SELECT COUNT(*) as count FROM sys_user`);
+    const userCount = row?.count || 0;
     if (userCount === 0) {
-      db.prepare(`
-        INSERT INTO sys_user (username, password, display_name, role, active, can_ocr)
-        VALUES ('admin', 'admin', 'Project Administrator', 'admin', 1, 1)
-      `).run();
+      await engine.run(
+        `INSERT INTO sys_user (username, password, display_name, role, active, can_ocr) VALUES ('admin', 'admin', 'Project Administrator', 'admin', 1, 1)`
+      );
     }
   } catch (err) {
     console.warn('[ensureUserColumns] Warning:', err.message);
@@ -974,14 +943,12 @@ function ensureUserColumns(db) {
 
 /**
  * GET /api/_sutram/schema/users
- * Returns users inside the active project database
  */
-schemaRouter.get('/users', (req, res) => {
+schemaRouter.get('/users', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
-    const db = engine.db.db || engine.db;
-    ensureUserColumns(db);
-    const users = db.prepare(`SELECT _id, username, display_name, role, active, COALESCE(can_ocr, 1) as can_ocr, created_at, updated_at FROM sys_user ORDER BY _id ASC`).all();
+    const { engine } = await getActiveProject(req);
+    await ensureUserColumns(engine);
+    const users = await engine.query(`SELECT _id, username, display_name, role, active, COALESCE(can_ocr, 1) as can_ocr, created_at, updated_at FROM sys_user ORDER BY _id ASC`);
     res.json({ success: true, result: users });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -990,11 +957,10 @@ schemaRouter.get('/users', (req, res) => {
 
 /**
  * POST /api/_sutram/schema/users
- * Creates a new Author or Admin user inside the active project database
  */
-schemaRouter.post('/users', (req, res) => {
+schemaRouter.post('/users', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
+    const { engine } = await getActiveProject(req);
     const { username, password, display_name, role = 'author', active = 1, can_ocr = 1 } = req.body;
     if (!username || !password) {
       return res.status(400).json({ success: false, error: 'Username and password are required' });
@@ -1003,15 +969,15 @@ schemaRouter.post('/users', (req, res) => {
     const cleanPass = String(password).trim();
     const cleanRole = role === 'admin' ? 'admin' : 'author';
     const cleanOcr = (can_ocr === 0 || can_ocr === false) ? 0 : 1;
-    const db = engine.db.db || engine.db;
-    ensureUserColumns(db);
+    await ensureUserColumns(engine);
 
-    const info = db.prepare(`
+    const info = await engine.run(`
       INSERT INTO sys_user (username, password, display_name, role, active, can_ocr)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run(cleanUser, cleanPass, display_name || cleanUser, cleanRole, active ? 1 : 0, cleanOcr);
+    `, [cleanUser, cleanPass, display_name || cleanUser, cleanRole, active ? 1 : 0, cleanOcr]);
 
-    const newUser = db.prepare(`SELECT _id, username, display_name, role, active, COALESCE(can_ocr, 1) as can_ocr, created_at, updated_at FROM sys_user WHERE _id = ?`).get(info.lastInsertRowid);
+    const newId = info.insertId ?? info.lastInsertRowid;
+    const newUser = await engine.queryOne(`SELECT _id, username, display_name, role, active, COALESCE(can_ocr, 1) as can_ocr, created_at, updated_at FROM sys_user WHERE _id = ?`, [newId]);
     res.json({ success: true, message: `User "${cleanUser}" created successfully in project`, result: newUser });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -1021,15 +987,14 @@ schemaRouter.post('/users', (req, res) => {
 /**
  * PUT /api/_sutram/schema/users/:id
  */
-schemaRouter.put('/users/:id', (req, res) => {
+schemaRouter.put('/users/:id', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
+    const { engine } = await getActiveProject(req);
     const id = req.params.id;
     const { username, password, display_name, role, active, can_ocr } = req.body;
-    const db = engine.db.db || engine.db;
-    ensureUserColumns(db);
+    await ensureUserColumns(engine);
 
-    const existing = db.prepare(`SELECT * FROM sys_user WHERE _id = ?`).get(id);
+    const existing = await engine.queryOne(`SELECT * FROM sys_user WHERE _id = ?`, [id]);
     if (!existing) {
       return res.status(404).json({ success: false, error: 'User not found in this project' });
     }
@@ -1042,19 +1007,19 @@ schemaRouter.put('/users/:id', (req, res) => {
     const updatedOcr = can_ocr !== undefined ? ((can_ocr === 0 || can_ocr === false) ? 0 : 1) : (existing.can_ocr !== undefined ? existing.can_ocr : 1);
 
     if (existing.role === 'admin' && updatedRole !== 'admin') {
-      const adminCount = db.prepare(`SELECT COUNT(*) as count FROM sys_user WHERE role = 'admin' AND active = 1`).get()?.count || 0;
+      const adminCount = (await engine.queryOne(`SELECT COUNT(*) as count FROM sys_user WHERE role = 'admin' AND active = 1`))?.count || 0;
       if (adminCount <= 1) {
         return res.status(400).json({ success: false, error: 'Cannot revoke admin role from the sole active administrator in this project' });
       }
     }
 
-    db.prepare(`
+    await engine.run(`
       UPDATE sys_user
-      SET username = ?, password = ?, display_name = ?, role = ?, active = ?, can_ocr = ?, updated_at = datetime('now', 'localtime')
+      SET username = ?, password = ?, display_name = ?, role = ?, active = ?, can_ocr = ?, updated_at = ?
       WHERE _id = ?
-    `).run(updatedUser, updatedPass, updatedDisp, updatedRole, updatedAct, updatedOcr, id);
+    `, [updatedUser, updatedPass, updatedDisp, updatedRole, updatedAct, updatedOcr, nowTimestampStr(), id]);
 
-    const result = db.prepare(`SELECT _id, username, display_name, role, active, COALESCE(can_ocr, 1) as can_ocr, created_at, updated_at FROM sys_user WHERE _id = ?`).get(id);
+    const result = await engine.queryOne(`SELECT _id, username, display_name, role, active, COALESCE(can_ocr, 1) as can_ocr, created_at, updated_at FROM sys_user WHERE _id = ?`, [id]);
     res.json({ success: true, message: `Project user updated successfully`, result });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -1064,25 +1029,24 @@ schemaRouter.put('/users/:id', (req, res) => {
 /**
  * DELETE /api/_sutram/schema/users/:id
  */
-schemaRouter.delete('/users/:id', (req, res) => {
+schemaRouter.delete('/users/:id', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
+    const { engine } = await getActiveProject(req);
     const id = req.params.id;
-    const db = engine.db.db || engine.db;
 
-    const existing = db.prepare(`SELECT * FROM sys_user WHERE _id = ?`).get(id);
+    const existing = await engine.queryOne(`SELECT * FROM sys_user WHERE _id = ?`, [id]);
     if (!existing) {
       return res.status(404).json({ success: false, error: 'User not found in this project' });
     }
 
     if (existing.role === 'admin') {
-      const adminCount = db.prepare(`SELECT COUNT(*) as count FROM sys_user WHERE role = 'admin' AND active = 1`).get()?.count || 0;
+      const adminCount = (await engine.queryOne(`SELECT COUNT(*) as count FROM sys_user WHERE role = 'admin' AND active = 1`))?.count || 0;
       if (adminCount <= 1) {
         return res.status(400).json({ success: false, error: 'Cannot delete the sole administrator of this project' });
       }
     }
 
-    db.prepare(`DELETE FROM sys_user WHERE _id = ?`).run(id);
+    await engine.run(`DELETE FROM sys_user WHERE _id = ?`, [id]);
     res.json({ success: true, message: `Project user "${existing.username}" deleted successfully` });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -1092,12 +1056,11 @@ schemaRouter.delete('/users/:id', (req, res) => {
 /**
  * GET /api/_sutram/schema/user-rights/:userId
  */
-schemaRouter.get('/user-rights/:userId', (req, res) => {
+schemaRouter.get('/user-rights/:userId', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
+    const { engine } = await getActiveProject(req);
     const userId = req.params.userId;
-    const db = engine.db.db || engine.db;
-    const rights = db.prepare(`SELECT * FROM sys_user_rights WHERE user_id = ?`).all(userId);
+    const rights = await engine.query(`SELECT * FROM sys_user_rights WHERE user_id = ?`, [userId]);
     res.json({ success: true, result: rights });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -1107,29 +1070,32 @@ schemaRouter.get('/user-rights/:userId', (req, res) => {
 /**
  * POST /api/_sutram/schema/user-rights/:userId
  */
-schemaRouter.post('/user-rights/:userId', (req, res) => {
+schemaRouter.post('/user-rights/:userId', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
+    const { engine } = await getActiveProject(req);
     const userId = req.params.userId;
     const rights = Array.isArray(req.body.rights) ? req.body.rights : [];
-    const db = engine.db.db || engine.db;
 
-    const upsert = db.prepare(`
-      INSERT INTO sys_user_rights (user_id, table_name, can_view, can_edit, can_delete, can_unmask, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
-      ON CONFLICT(user_id, table_name) DO UPDATE SET
-        can_view = excluded.can_view,
-        can_edit = excluded.can_edit,
-        can_delete = excluded.can_delete,
-        can_unmask = excluded.can_unmask,
-        updated_at = datetime('now', 'localtime')
-    `);
-
-    db.transaction(() => {
+    const now = nowTimestampStr();
+    const needTx = !engine.inTransaction;
+    try {
+      if (needTx) await engine.begin();
       for (const r of rights) {
-        upsert.run(userId, r.table_name, r.can_view ? 1 : 0, r.can_edit ? 1 : 0, r.can_delete ? 1 : 0, r.can_unmask ? 1 : 0);
+        await engine.upsert('sys_user_rights', ['user_id', 'table_name'], {
+          user_id: userId,
+          table_name: r.table_name,
+          can_view: r.can_view ? 1 : 0,
+          can_edit: r.can_edit ? 1 : 0,
+          can_delete: r.can_delete ? 1 : 0,
+          can_unmask: r.can_unmask ? 1 : 0,
+          updated_at: now
+        });
       }
-    })();
+      if (needTx) await engine.commit();
+    } catch (txErr) {
+      if (needTx && engine.inTransaction) await engine.rollback();
+      throw txErr;
+    }
 
     res.json({ success: true, message: 'User rights updated successfully in project' });
   } catch (err) {
@@ -1140,19 +1106,17 @@ schemaRouter.post('/user-rights/:userId', (req, res) => {
 /**
  * In-Project Password and Column Security Handlers
  */
-function handleVerifyUnmask(req, res) {
+async function handleVerifyUnmask(req, res) {
   try {
-    const { engine } = getActiveProject(req);
+    const { engine } = await getActiveProject(req);
     const { userId, table, column, secret } = req.body;
     if (!secret) return res.status(400).json({ success: false, error: 'Password or PIN required' });
     const cleanSecret = String(secret).trim();
-    const db = engine.db.db || engine.db;
 
-    // 1. Check custom column security PIN first
     let colSec = null;
     if (table && column) {
       try {
-        colSec = db.prepare(`SELECT secret_hash FROM sys_column_security WHERE table_name = ? AND column_name = ?`).get(table, column);
+        colSec = await engine.queryOne(`SELECT secret_hash FROM sys_column_security WHERE table_name = ? AND column_name = ?`, [table, column]);
       } catch (e) {}
     }
 
@@ -1164,15 +1128,13 @@ function handleVerifyUnmask(req, res) {
       }
     }
 
-    // 2. Fallback to active Admin password in this project
-    const adminUser = db.prepare(`SELECT * FROM sys_user WHERE role = 'admin' AND active = 1 AND password = ?`).get(cleanSecret);
+    const adminUser = await engine.queryOne(`SELECT * FROM sys_user WHERE role = 'admin' AND active = 1 AND password = ?`, [cleanSecret]);
     if (adminUser) {
       return res.json({ success: true, authorized: true, method: 'admin_password' });
     }
 
-    // 3. Match caller user password
     if (userId) {
-      const user = db.prepare(`SELECT * FROM sys_user WHERE (_id = ? OR username = ?) AND active = 1 AND password = ?`).get(userId, userId, cleanSecret);
+      const user = await engine.queryOne(`SELECT * FROM sys_user WHERE (_id = ? OR username = ?) AND active = 1 AND password = ?`, [userId, userId, cleanSecret]);
       if (user) {
         return res.json({ success: true, authorized: true, method: 'user_password' });
       }
@@ -1184,25 +1146,23 @@ function handleVerifyUnmask(req, res) {
   }
 }
 
-function handleSetColumnSecurity(req, res) {
+async function handleSetColumnSecurity(req, res) {
   try {
-    const { engine } = getActiveProject(req);
+    const { engine } = await getActiveProject(req);
     const { table, column, secret } = req.body;
     if (!table || !column) return res.status(400).json({ success: false, error: 'Table and column required' });
-    const db = engine.db.db || engine.db;
 
     if (!secret || !String(secret).trim()) {
-      db.prepare(`DELETE FROM sys_column_security WHERE table_name = ? AND column_name = ?`).run(table, column);
+      await engine.run(`DELETE FROM sys_column_security WHERE table_name = ? AND column_name = ?`, [table, column]);
       return res.json({ success: true, message: 'Column security PIN removed (admin password will be used)' });
     }
 
-    db.prepare(`
-      INSERT INTO sys_column_security (table_name, column_name, secret_hash, updated_at)
-      VALUES (?, ?, ?, datetime('now', 'localtime'))
-      ON CONFLICT(table_name, column_name) DO UPDATE SET
-        secret_hash = excluded.secret_hash,
-        updated_at = datetime('now', 'localtime')
-    `).run(table, column, String(secret).trim());
+    await engine.upsert('sys_column_security', ['table_name', 'column_name'], {
+      table_name: table,
+      column_name: column,
+      secret_hash: String(secret).trim(),
+      updated_at: nowTimestampStr()
+    });
 
     res.json({ success: true, message: 'Column security PIN saved successfully' });
   } catch (err) {
@@ -1217,31 +1177,29 @@ schemaRouter.post('/auth/set-column-security', handleSetColumnSecurity);
 
 /**
  * POST /api/_sutram/auth/login
- * Project-level database user login (sys_user)
  */
-function handleProjectUserLogin(req, res) {
+async function handleProjectUserLogin(req, res) {
   try {
-    const { engine } = getActiveProject(req);
+    const { engine } = await getActiveProject(req);
     const { username, password } = req.body;
     if (!username || !password) {
       return res.status(400).json({ success: false, error: 'Username and password are required' });
     }
     const cleanUser = String(username).trim();
     const cleanPass = String(password).trim();
-    const db = engine.db.db || engine.db;
-    ensureUserColumns(db);
+    await ensureUserColumns(engine);
 
-    const user = db.prepare(`
+    const user = await engine.queryOne(`
       SELECT _id, username, password, display_name, role, active, COALESCE(can_ocr, 1) as can_ocr
       FROM sys_user
       WHERE (username = ? OR _id = ?) AND active = 1
-    `).get(cleanUser, cleanUser);
+    `, [cleanUser, cleanUser]);
 
     if (!user || user.password !== cleanPass) {
       return res.status(401).json({ success: false, error: 'अमान्य यूज़रनेम या पासवर्ड (Invalid username or password)' });
     }
 
-    const rights = db.prepare(`SELECT table_name, can_view, can_edit, can_delete, can_unmask FROM sys_user_rights WHERE user_id = ?`).all(user._id);
+    const rights = await engine.query(`SELECT table_name, can_view, can_edit, can_delete, can_unmask FROM sys_user_rights WHERE user_id = ?`, [user._id]);
 
     return res.json({
       success: true,
@@ -1264,29 +1222,27 @@ function handleProjectUserLogin(req, res) {
 
 /**
  * GET /api/_sutram/auth/me
- * Retrieves current user and rights for the active project
  */
-function handleGetProjectUserMe(req, res) {
+async function handleGetProjectUserMe(req, res) {
   try {
-    const { engine } = getActiveProject(req);
+    const { engine } = await getActiveProject(req);
     const userParam = req.query.username || req.query.userId || req.headers['x-sutram-user'];
     if (!userParam) {
       return res.json({ success: true, result: null });
     }
-    const db = engine.db.db || engine.db;
-    ensureUserColumns(db);
+    await ensureUserColumns(engine);
 
-    const user = db.prepare(`
+    const user = await engine.queryOne(`
       SELECT _id, username, display_name, role, active, COALESCE(can_ocr, 1) as can_ocr
       FROM sys_user
       WHERE (username = ? OR _id = ?) AND active = 1
-    `).get(userParam, userParam);
+    `, [userParam, userParam]);
 
     if (!user) {
       return res.status(404).json({ success: false, error: 'User not found in project' });
     }
 
-    const rights = db.prepare(`SELECT table_name, can_view, can_edit, can_delete, can_unmask FROM sys_user_rights WHERE user_id = ?`).all(user._id);
+    const rights = await engine.query(`SELECT table_name, can_view, can_edit, can_delete, can_unmask FROM sys_user_rights WHERE user_id = ?`, [user._id]);
 
     res.json({
       success: true,
@@ -1316,16 +1272,15 @@ schemaRouter.get('/auth/me', handleGetProjectUserMe);
  * POST /api/_sutram/seed-demo
  * Seeds starter tables in the active project database
  */
-schemaRouter.post('/seed-demo', (req, res) => {
+schemaRouter.post('/seed-demo', async (req, res) => {
   try {
-    const { engine, excel } = getActiveProject(req);
-    const existing = Object.keys(engine._schema || {}).filter(t => !t.startsWith('sys_'));
+    const { engine, excel } = await getActiveProject(req);
+    const existing = Object.keys(engine._schema || {}).filter(t => !t.startsWith('sys_') && !t.startsWith('xls_'));
     if (existing.length > 0) {
       return res.json({ success: true, message: 'Database already has tables', tables: existing });
     }
 
-    // 1. Create 'item' table
-    engine.schema.createTable({
+    await engine.schema.createTable({
       table_name: 'item',
       label: 'Item Master (सामग्री सूची)',
       description: 'Products and items inventory master',
@@ -1339,8 +1294,7 @@ schemaRouter.post('/seed-demo', (req, res) => {
       ]
     });
 
-    // 2. Create 'contact' table
-    engine.schema.createTable({
+    await engine.schema.createTable({
       table_name: 'contact',
       label: 'Contacts & Parties (पार्टी विवरण)',
       description: 'Vendors, customers, and counterparties',
@@ -1353,8 +1307,7 @@ schemaRouter.post('/seed-demo', (req, res) => {
       ]
     });
 
-    // 3. Create 'stock_ledger' table
-    engine.schema.createTable({
+    await engine.schema.createTable({
       table_name: 'stock_ledger',
       label: 'Stock Ledger (स्टॉक रजिस्टर)',
       description: 'Inventory transactions ledger',
@@ -1367,17 +1320,14 @@ schemaRouter.post('/seed-demo', (req, res) => {
       ]
     });
 
-    projectManager._syncExcelRegistrations(engine, excel, true);
+    await projectManager._syncExcelRegistrations(engine, excel, true);
 
-    // Insert sample starter data
-    const itemTbl = engine.table('item');
-    itemTbl.insert({ item_name: 'Basmati Rice (बासमती चावल)', item_code: 'RICE-01', category: 'Grains', unit: 'KG', rate: 85, active: 1 });
-    itemTbl.insert({ item_name: 'Mustard Oil (सरसों का तेल)', item_code: 'OIL-02', category: 'Oils', unit: 'Litre', rate: 140, active: 1 });
-    itemTbl.insert({ item_name: 'Pure Desi Ghee (शुद्ध घी)', item_code: 'GHEE-01', category: 'Dairy', unit: 'KG', rate: 550, active: 1 });
+    await engine.insert('item', { item_name: 'Basmati Rice (बासमती चावल)', item_code: 'RICE-01', category: 'Grains', unit: 'KG', rate: 85, active: 1 }, false);
+    await engine.insert('item', { item_name: 'Mustard Oil (सरसों का तेल)', item_code: 'OIL-02', category: 'Oils', unit: 'Litre', rate: 140, active: 1 }, false);
+    await engine.insert('item', { item_name: 'Pure Desi Ghee (शुद्ध घी)', item_code: 'GHEE-01', category: 'Dairy', unit: 'KG', rate: 550, active: 1 }, false);
 
-    const contactTbl = engine.table('contact');
-    contactTbl.insert({ party_name: 'Shree Krishna Traders', phone: '9876543210', city: 'Jaipur', gst_num: '08AAAAA0000A1Z5', balance: 12500 });
-    contactTbl.insert({ party_name: 'Radhe Shyam & Sons', phone: '9829012345', city: 'Delhi', gst_num: '07BBBBB1111B1Z2', balance: -4500 });
+    await engine.insert('contact', { party_name: 'Shree Krishna Traders', phone: '9876543210', city: 'Jaipur', gst_num: '08AAAAA0000A1Z5', balance: 12500 }, false);
+    await engine.insert('contact', { party_name: 'Radhe Shyam & Sons', phone: '9829012345', city: 'Delhi', gst_num: '07BBBBB1111B1Z2', balance: -4500 }, false);
 
     res.json({
       success: true,
@@ -1403,62 +1353,62 @@ app.use('/_sutram/auth', authRouter);
 // ─────────────────────────────────────────────────────────────
 const reminderRouter = express.Router();
 
-reminderRouter.get('/rules', (req, res) => {
+reminderRouter.get('/rules', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
-    const rules = engine.reminder.getRules(req.query);
+    const { engine } = await getActiveProject(req);
+    const rules = await engine.reminder.getRules(req.query);
     res.json({ success: true, count: rules.length, result: rules });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-reminderRouter.post('/rules', (req, res) => {
+reminderRouter.post('/rules', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
-    const ruleId = engine.reminder.createRule(req.body);
-    const newRule = engine.reminder.getRuleById(ruleId);
+    const { engine } = await getActiveProject(req);
+    const ruleId = await engine.reminder.createRule(req.body);
+    const newRule = await engine.reminder.getRuleById(ruleId);
     res.json({ success: true, message: 'Reminder rule created', ruleId, result: newRule });
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
   }
 });
 
-reminderRouter.put('/rules/:id', (req, res) => {
+reminderRouter.put('/rules/:id', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
-    engine.reminder.updateRule(req.params.id, req.body);
-    const updated = engine.reminder.getRuleById(req.params.id);
+    const { engine } = await getActiveProject(req);
+    await engine.reminder.updateRule(req.params.id, req.body);
+    const updated = await engine.reminder.getRuleById(req.params.id);
     res.json({ success: true, message: 'Reminder rule updated', result: updated });
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
   }
 });
 
-reminderRouter.delete('/rules/:id', (req, res) => {
+reminderRouter.delete('/rules/:id', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
-    const deleted = engine.reminder.deleteRule(req.params.id);
+    const { engine } = await getActiveProject(req);
+    const deleted = await engine.reminder.deleteRule(req.params.id);
     res.json({ success: true, message: `Rule ${req.params.id} deleted`, deleted });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-reminderRouter.post('/test', (req, res) => {
+reminderRouter.post('/test', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
-    const preview = engine.reminder.testRule(req.body);
+    const { engine } = await getActiveProject(req);
+    const preview = await engine.reminder.testRule(req.body);
     res.json({ success: true, result: preview });
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
   }
 });
 
-reminderRouter.get('/active', (req, res) => {
+reminderRouter.get('/active', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
-    const evalResult = engine.reminder.evaluateAll();
+    const { engine } = await getActiveProject(req);
+    const evalResult = await engine.reminder.evaluateAll();
     const active = evalResult.activeAlerts || [];
     const permanent = evalResult.permanentAlerts || [];
     const combined = [...active];
@@ -1473,33 +1423,33 @@ reminderRouter.get('/active', (req, res) => {
   }
 });
 
-reminderRouter.post('/evaluate', (req, res) => {
+reminderRouter.post('/evaluate', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
-    const result = engine.reminder.evaluateAll({ force: true });
+    const { engine } = await getActiveProject(req);
+    const result = await engine.reminder.evaluateAll({ force: true });
     res.json({ success: true, result });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-reminderRouter.post('/snooze/:logId', (req, res) => {
+reminderRouter.post('/snooze/:logId', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
+    const { engine } = await getActiveProject(req);
     const minutes = req.body?.minutes || 15;
-    engine.reminder.snooze(req.params.logId, minutes);
+    await engine.reminder.snooze(req.params.logId, minutes);
     res.json({ success: true, message: `Alert snoozed for ${minutes} minutes` });
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
   }
 });
 
-reminderRouter.post('/dismiss/:logId', (req, res) => {
+reminderRouter.post('/dismiss/:logId', async (req, res) => {
   try {
-    const { engine } = getActiveProject(req);
+    const { engine } = await getActiveProject(req);
     const user = req.body?.user || 'admin';
     const reason = req.body?.reason || '';
-    engine.reminder.dismiss(req.params.logId, user, reason);
+    await engine.reminder.dismiss(req.params.logId, user, reason);
     res.json({ success: true, message: 'Alert dismissed successfully' });
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
@@ -1512,9 +1462,9 @@ app.use('/_sutram/reminders', reminderRouter);
 // ─────────────────────────────────────────────────────────────
 // 7. Dynamic Project SutramExcel Routing
 // ─────────────────────────────────────────────────────────────
-app.use(['/_sutram/excel', '/api/_sutram/excel', '/api/sutram/excel'], (req, res, next) => {
+app.use(['/_sutram/excel', '/api/_sutram/excel', '/api/sutram/excel'], async (req, res, next) => {
   try {
-    const { excel } = getActiveProject(req);
+    const { excel } = await getActiveProject(req);
     return excel.router()(req, res, next);
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -1526,10 +1476,11 @@ app.use(['/_sutram/excel', '/api/_sutram/excel', '/api/sutram/excel'], (req, res
 // ─────────────────────────────────────────────────────────────
 const { SutramVision } = require('../packages/sutramVision');
 const sutramVision = new SutramVision();
-app.use(['/_sutram/vision', '/api/_sutram/vision', '/api/sutram/vision'], (req, res, next) => {
+app.use(['/_sutram/vision', '/api/_sutram/vision', '/api/sutram/vision'], async (req, res, next) => {
   try {
-    const { core } = getActiveProject(req);
-    req.projectDb = core.getRawDb();
+    const { engine } = await getActiveProject(req);
+    req.sutramEngine = engine;
+    req.projectDb = engine.db || null;
   } catch (err) {
     // If no active project in context, ignore
   }
@@ -1539,13 +1490,19 @@ app.use(['/_sutram/vision', '/api/_sutram/vision', '/api/sutram/vision'], (req, 
 // ─────────────────────────────────────────────────────────────
 // 8. Dynamic Project Core SutramEngine CRUD REST APIs
 // ─────────────────────────────────────────────────────────────
-app.use('/api', (req, res, next) => {
-  // If request begins with _sutram, it was already handled or unknown
-  if (req.path.startsWith('/_sutram/')) {
+app.use('/api', async (req, res, next) => {
+  // Let system diagnostics and server-level _sutram namespaces pass through cleanly;
+  // allow engine-owned /_sutram/menu, /_sutram/schema/:table, and /_sutram/reports to reach engine.router().
+  if (
+    req.path === '/' ||
+    req.path === '/status' ||
+    req.path === '/health' ||
+    /^\/_sutram\/(master|auth|reminders|excel|vision|lan|update)(\/|$)/.test(req.path)
+  ) {
     return next();
   }
   try {
-    const { engine } = getActiveProject(req);
+    const { engine } = await getActiveProject(req);
     return engine.router()(req, res, next);
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -1555,10 +1512,10 @@ app.use('/api', (req, res, next) => {
 // ─────────────────────────────────────────────────────────────
 // 9. Root & Healthcheck (Serve Angular Single Page App on `/`)
 // ─────────────────────────────────────────────────────────────
-function sendApiStatus(req, res) {
+async function sendApiStatus(req, res) {
   try {
-    const defaultInstance = getActiveProject(req);
-    const tables = Object.keys(defaultInstance.engine._schema || {}).filter(t => !t.startsWith('sys_'));
+    const defaultInstance = await getActiveProject(req);
+    const tables = Object.keys(defaultInstance.engine._schema || {}).filter(t => !t.startsWith('sys_') && !t.startsWith('xls_'));
     res.json({
       app: 'Sutram Multi-Project Universal ERP Engine Platform',
       status: 'online',
@@ -1578,12 +1535,12 @@ function sendApiStatus(req, res) {
 
 app.get(['/api', '/api/status'], sendApiStatus);
 
-app.get('/', (req, res, next) => {
+app.get('/', async (req, res, next) => {
   const indexHtml = path.join(uiDistPath, 'index.html');
   if (fs.existsSync(indexHtml) && req.accepts('html')) {
     return res.sendFile(indexHtml);
   }
-  sendApiStatus(req, res);
+  await sendApiStatus(req, res);
 });
 
 app.get('/api/health', (req, res) => {
@@ -1639,16 +1596,17 @@ lanRouter.get('/peers', (req, res) => {
 });
 
 // POST /api/_sutram/lan/share - Toggle project sharing on LAN
-lanRouter.post('/share', (req, res) => {
+lanRouter.post('/share', async (req, res) => {
   try {
     const { projectId, name, authType, pin, password, description } = req.body;
     if (!projectId) return res.status(400).json({ success: false, error: 'projectId is required' });
 
     let tablesCount = 0;
     try {
-      const proj = projectManager.getProject(projectId);
-      if (proj && proj.engine && proj.engine.db) {
-        tablesCount = proj.engine.db.prepare("SELECT count(*) as count FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").get()?.count || 0;
+      const proj = await projectManager.getProject(projectId);
+      if (proj && proj.engine && typeof proj.engine.listPhysicalTables === 'function') {
+        const phys = await proj.engine.listPhysicalTables();
+        tablesCount = phys.filter(t => !t.startsWith('sys_') && !t.startsWith('xls_') && !t.startsWith('sqlite_')).length;
       }
     } catch {}
 

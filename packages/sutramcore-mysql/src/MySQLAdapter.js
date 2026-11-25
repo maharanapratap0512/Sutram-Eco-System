@@ -40,7 +40,12 @@ class MySQLAdapter {
         };
 
         this.pool = null;
+        this._conn = null;
         this.dialect = 'mysql';
+    }
+
+    get inTransaction() {
+        return Boolean(this._conn);
     }
 
     // ─────────────────────────────────────────────────────────
@@ -68,39 +73,48 @@ class MySQLAdapter {
     // All return Promises — use await
     // ─────────────────────────────────────────────────────────
 
-    // Execute INSERT / UPDATE / DELETE
+    async _exec(sql, params = []) {
+        const target = this._conn || this.pool;
+        if (!target) throw new Error('[sutramcore-mysql] Not connected — call connect() first');
+        const flatParams = this._flattenParams(params);
+        const finalSql = this._toMySQLPlaceholders(sql);
+        if (flatParams.length === 0) {
+            return await target.query(finalSql);
+        }
+        try {
+            return await target.execute(finalSql, flatParams);
+        } catch (err) {
+            if (err && err.code === 'ER_UNSUPPORTED_PS') {
+                return await target.query(finalSql, flatParams);
+            }
+            throw err;
+        }
+    }
+
+    // Execute INSERT / UPDATE / DELETE / DDL
     // Returns { insertId, affectedRows, changedRows }
     async run(sql, params = []) {
-        const [result] = await this.pool.execute(
-            this._toMySQLPlaceholders(sql),
-            this._flattenParams(params)
-        );
+        const [result] = await this._exec(sql, params);
         return {
-            insertId:     result.insertId,
-            affectedRows: result.affectedRows,
-            changedRows:  result.changedRows ?? 0,
+            insertId:        result?.insertId ?? 0,
+            affectedRows:    result?.affectedRows ?? 0,
+            changedRows:     result?.changedRows ?? 0,
             // compat with better-sqlite3 naming
-            lastInsertRowid: result.insertId,
-            changes:         result.affectedRows,
+            lastInsertRowid: result?.insertId ?? 0,
+            changes:         result?.affectedRows ?? 0,
         };
     }
 
-    // Execute SELECT — return single row or undefined
+    // Execute SELECT — return single row or null
     async get(sql, params = []) {
-        const [rows] = await this.pool.execute(
-            this._toMySQLPlaceholders(sql),
-            this._flattenParams(params)
-        );
-        return rows[0] ?? null;
+        const [rows] = await this._exec(sql, params);
+        return (Array.isArray(rows) ? rows[0] : null) ?? null;
     }
 
     // Execute SELECT — return all rows
     async all(sql, params = []) {
-        const [rows] = await this.pool.execute(
-            this._toMySQLPlaceholders(sql),
-            this._flattenParams(params)
-        );
-        return rows;
+        const [rows] = await this._exec(sql, params);
+        return Array.isArray(rows) ? rows : [];
     }
 
     // ─────────────────────────────────────────────────────────
@@ -196,24 +210,43 @@ class MySQLScopedAdapter {
         this.dialect = 'mysql';
     }
 
+    get inTransaction() {
+        return true;
+    }
+
+    async _exec(sql, params = []) {
+        const flatParams = Array.isArray(params) ? params : (params !== undefined && params !== null ? [params] : []);
+        if (flatParams.length === 0) {
+            return await this._conn.query(sql);
+        }
+        try {
+            return await this._conn.execute(sql, flatParams);
+        } catch (err) {
+            if (err && err.code === 'ER_UNSUPPORTED_PS') {
+                return await this._conn.query(sql, flatParams);
+            }
+            throw err;
+        }
+    }
+
     async run(sql, params = []) {
-        const [result] = await this._conn.execute(sql, params);
+        const [result] = await this._exec(sql, params);
         return {
-            insertId:        result.insertId,
-            affectedRows:    result.affectedRows,
-            lastInsertRowid: result.insertId,
-            changes:         result.affectedRows,
+            insertId:        result?.insertId ?? 0,
+            affectedRows:    result?.affectedRows ?? 0,
+            lastInsertRowid: result?.insertId ?? 0,
+            changes:         result?.affectedRows ?? 0,
         };
     }
 
     async get(sql, params = []) {
-        const [rows] = await this._conn.execute(sql, params);
-        return rows[0] ?? null;
+        const [rows] = await this._exec(sql, params);
+        return (Array.isArray(rows) ? rows[0] : null) ?? null;
     }
 
     async all(sql, params = []) {
-        const [rows] = await this._conn.execute(sql, params);
-        return rows;
+        const [rows] = await this._exec(sql, params);
+        return Array.isArray(rows) ? rows : [];
     }
 }
 
