@@ -635,5 +635,39 @@ export class ProjectContextService {
   public revokeProjectAccess(slug: string, userId: number): Observable<any> {
     return this.http.delete(`/api/_sutram/master/projects/${slug}/access/${userId}`);
   }
+
+  /**
+   * Emergency Reset Application State & Local Caches.
+   * Completely clears localStorage, sessionStorage, active projects, tokens, and in-memory subjects,
+   * cleanly escaping any locked dialogs, stale keys, or corrupted states without touching physical DB files.
+   */
+  public emergencyResetAppState(hardReload: boolean = true): void {
+    try {
+      const savedTheme = localStorage.getItem('sutram_dark_mode');
+      localStorage.clear();
+      sessionStorage.clear();
+      if (savedTheme) {
+        localStorage.setItem('sutram_dark_mode', savedTheme);
+      }
+    } catch (e) {
+      console.warn('[ProjectContextService] emergencyResetAppState storage clear error:', e);
+    }
+
+    this.masterTokenValue = '';
+    this.lanTokenValue = '';
+    this.pendingLanProjectSlug = '';
+    this.projectSessionsMap = {};
+    this.projectUnmaskTokensMap = {};
+
+    this.activeProjectSubject.next(null);
+    this.openProjectsSubject.next([]);
+    this.masterUserSubject.next(null);
+    this.inProjectUserSubject.next(null);
+    this.projectsSubject.next([]);
+
+    if (hardReload && typeof window !== 'undefined') {
+      window.location.href = window.location.origin + window.location.pathname;
+    }
+  }
 }
 

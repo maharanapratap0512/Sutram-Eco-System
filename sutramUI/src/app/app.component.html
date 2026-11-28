@@ -4,7 +4,8 @@
     *ngIf="!projectContext.isAuthenticated"
     [isDarkMode]="isDarkMode"
     (loginSuccess)="onMasterLoginSuccess($event)"
-    (toggleTheme)="toggleTheme()">
+    (toggleTheme)="toggleTheme()"
+    (emergencyReset)="onPromptEmergencyReset()">
   </app-master-login>
 
   <ng-container *ngIf="projectContext.isAuthenticated">
@@ -15,6 +16,7 @@
       [activeProject]="projectContext.activeProject"
       [showingHub]="showingHub"
       [isServerOnline]="isServerOnline"
+      [serverPort]="serverPort"
       [isDarkMode]="isDarkMode"
       (selectProject)="onSelectProjectTab($event)"
       (closeProject)="onCloseProjectTab($event)"
@@ -22,7 +24,8 @@
       (toggleTheme)="toggleTheme()"
       (logout)="onLogout()"
       (openLanModal)="onOpenLanModal()"
-      (openUpdateModal)="onOpenUpdateModal()">
+      (openUpdateModal)="onOpenUpdateModal()"
+      (emergencyReset)="onPromptEmergencyReset()">
     </app-project-header>
 
     <!-- 1. Sutram Dynamic Workspace Hub (Start Screen Canvas) -->
@@ -30,11 +33,13 @@
       *ngIf="showingHub || projectContext.openProjects.length === 0"
       [isDarkMode]="isDarkMode"
       [isServerOnline]="isServerOnline"
+      [serverPort]="serverPort"
       (openProject)="onOpenProject($event)"
       (toggleTheme)="toggleTheme()"
       (logout)="onLogout()"
       (openLanModal)="onOpenLanModal()"
-      (openUpdateModal)="onOpenUpdateModal()">
+      (openUpdateModal)="onOpenUpdateModal()"
+      (emergencyReset)="onPromptEmergencyReset()">
     </app-project-hub>
 
     <!-- 2. Active Project Workspace Canvas (Dedicated Single Studio connected to Active Database) -->
@@ -50,6 +55,8 @@
           [enableAuth]="true"
           (sessionAuthenticated)="onProjectSessionAuthenticated($event)"
           (sessionLocked)="onProjectSessionLocked($event)"
+          (exitToHub)="onGoToHub()"
+          (emergencyReset)="onPromptEmergencyReset()"
           (openProjectUsersModal)="onOpenProjectUsersModal()"
           (tableCreated)="onTableCreatedFromStudio($event)">
         </sutram-excel-studio>
@@ -74,4 +81,47 @@
       [isDarkMode]="isDarkMode">
     </app-app-updater-dialog>
   </ng-container>
+
+  <!-- Omnipresent Emergency App Reset Confirmation Modal (Ctrl+Alt+R) -->
+  <p-dialog
+    [(visible)]="showResetConfirmModal"
+    [modal]="true"
+    [closable]="true"
+    [draggable]="false"
+    [resizable]="false"
+    [style]="{ width: '92vw', maxWidth: '440px' }"
+    header="Emergency Reset Application State">
+
+    <div class="d-flex align-items-start gap-3 py-2">
+      <i class="pi pi-exclamation-triangle text-danger" style="font-size: 2rem; flex-shrink: 0;"></i>
+      <div>
+        <h4 class="m-0 mb-1 font-bold">Clear Cache & Reset App State?</h4>
+        <p class="text-secondary text-sm m-0 mb-3" style="line-height: 1.45;">
+          This will purge all temporary cached sessions, close open project tabs, clear browser storage, and return you cleanly to the fresh Workspace Login.
+        </p>
+        <div class="p-2 border-round surface-ground border-1 surface-border d-flex align-items-center gap-2 text-xs">
+          <i class="pi pi-shield text-success"></i>
+          <span><strong>100% Safe:</strong> Your actual database files (.db, MySQL tables) will NOT be deleted or altered.</span>
+        </div>
+      </div>
+    </div>
+
+    <ng-template pTemplate="footer">
+      <button
+        pButton
+        type="button"
+        class="p-button-text p-button-secondary p-button-sm"
+        label="Cancel"
+        (click)="showResetConfirmModal = false">
+      </button>
+      <button
+        pButton
+        type="button"
+        class="p-button-danger p-button-sm"
+        icon="pi pi-refresh"
+        label="Clear Cache & Reset Now"
+        (click)="onConfirmEmergencyReset()">
+      </button>
+    </ng-template>
+  </p-dialog>
 </div>

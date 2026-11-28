@@ -1579,9 +1579,11 @@ app.get('/', async (req, res, next) => {
 });
 
 app.get('/api/health', (req, res) => {
+  const activePort = server?.address?.()?.port || config.port;
   res.json({
     status: 'online',
     app: 'Sutram Multi-Project ERP Server',
+    port: activePort,
     timestamp: new Date().toISOString()
   });
 });
@@ -1768,34 +1770,77 @@ if (fs.existsSync(uiDistPath)) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// 10. Start Server
+// 10. Start Server (Automatic Port Hunting if Port is in Use)
 // ─────────────────────────────────────────────────────────────
 let server = null;
-if (require.main === module) {
-  server = app.listen(config.port, async () => {
-    const projects = projectManager.listProjects();
-    
-    // Auto-start LAN beacon & scanner
-    try {
-      await sutramLan.start();
-      console.log(`📡 [sutramLan] Active on UDP Port ${sutramLan.broadcastPort} (Node: "${sutramLan.nodeName}")`);
-    } catch (lanErr) {
-      console.warn(`⚠️ [sutramLan] Warning: Could not bind UDP port: ${lanErr.message}`);
+
+function listenWithPortHunting(startPort, maxTries = 20) {
+  return new Promise((resolve, reject) => {
+    let currentPort = startPort;
+    let attempts = 0;
+
+    function tryBind() {
+      const srv = app.listen(currentPort);
+
+      srv.on('listening', async () => {
+        config.port = currentPort;
+        server = srv;
+        try {
+          sutramLan.httpPort = currentPort;
+          await sutramLan.start();
+          console.log(`📡 [sutramLan] Active on UDP Port ${sutramLan.broadcastPort} (Node: "${sutramLan.nodeName}", HTTP: ${currentPort})`);
+        } catch (lanErr) {
+          console.warn(`⚠️ [sutramLan] Warning: Could not bind UDP port: ${lanErr.message}`);
+        }
+
+        // Write runtime file so desktop launchers & local scripts know the active port
+        try {
+          fs.writeFileSync(path.resolve(config.dataDir, '.sutram_runtime.json'), JSON.stringify({
+            port: currentPort,
+            pid: process.pid,
+            timestamp: new Date().toISOString()
+          }, null, 2));
+        } catch {}
+
+        resolve(srv);
+      });
+
+      srv.on('error', (err) => {
+        if (err.code === 'EADDRINUSE' && attempts < maxTries) {
+          console.warn(`⚠️ [sutramServer] Port ${currentPort} is already in use. Hunting next available port...`);
+          currentPort++;
+          attempts++;
+          setTimeout(tryBind, 50);
+        } else {
+          reject(err);
+        }
+      });
     }
 
+    tryBind();
+  });
+}
+
+if (require.main === module) {
+  listenWithPortHunting(config.port).then((activeServer) => {
+    const projects = projectManager.listProjects();
+    const boundPort = activeServer.address().port;
     console.log(`
 ╔═══════════════════════════════════════════════════════════════════╗
 ║             SUTRAM MULTI-PROJECT ERP ENGINE SERVER                ║
 ║           Universal Multi-Database Workspace Platform             ║
 ╠═══════════════════════════════════════════════════════════════════╣
-║  🌐 Backend API:        http://localhost:${config.port}                     ║
-║  📡 LAN Mesh Status:    http://localhost:${config.port}/api/_sutram/lan/status      ║
-║  🚀 Master Projects:    http://localhost:${config.port}/api/_sutram/master/projects ║
+║  🌐 Backend API:        http://localhost:${boundPort}                     ║
+║  📡 LAN Mesh Status:    http://localhost:${boundPort}/api/_sutram/lan/status      ║
+║  🚀 Master Projects:    http://localhost:${boundPort}/api/_sutram/master/projects ║
 ║  📊 Active Projects:    ${projects.length} workspace database(s) loaded       ║
 ║  💾 Master Registry:    sutram_master.db (Managed Mode)           ║
-║  💻 Frontend UI:        http://localhost:4300 (sutramUI)           ║
+║  💻 Web & Browser:      http://localhost:${boundPort} (Universal Access)  ║
 ╚═══════════════════════════════════════════════════════════════════╝
     `);
+  }).catch((err) => {
+    console.error('❌ [sutramServer] Failed to bind to any available port:', err);
+    process.exit(1);
   });
 }
 

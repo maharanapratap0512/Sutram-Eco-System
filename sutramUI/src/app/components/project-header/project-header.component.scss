@@ -246,6 +246,18 @@
       }
     }
 
+    .reset-header-btn {
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      color: #eab308 !important;
+
+      &:hover {
+        background: rgba(234, 179, 8, 0.12) !important;
+        color: #ca8a04 !important;
+      }
+    }
+
     .logout-btn {
       width: 24px;
       height: 24px;

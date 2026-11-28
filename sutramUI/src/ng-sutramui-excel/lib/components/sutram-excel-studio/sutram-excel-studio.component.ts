@@ -361,6 +361,8 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
 
   @Output() sessionAuthenticated = new EventEmitter<{ projectSlug: string; user: any; rights: any[]; token: string }>();
   @Output() sessionLocked = new EventEmitter<string>();
+  @Output() exitToHub = new EventEmitter<void>();
+  @Output() emergencyReset = new EventEmitter<void>();
 
   public showAuthDialog: boolean = false;
   public authDialogCanDismiss: boolean = true;
@@ -2030,6 +2032,14 @@ export class SutramExcelStudioComponent implements OnInit, OnDestroy {
         this.cdr.markForCheck();
       }
     });
+  }
+
+  public onLockExitToHub(): void {
+    this.exitToHub.emit();
+  }
+
+  public onLockEmergencyReset(): void {
+    this.emergencyReset.emit();
   }
 
   private _applyAuthenticatedResult(result: { user: any; rights: any[]; token?: string }, emitEvent: boolean = true): void {

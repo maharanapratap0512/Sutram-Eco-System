@@ -1452,7 +1452,9 @@
     [apiBase]="apiBase"
     [projectSlug]="getResolvedProjectSlug()"
     [canDismiss]="authDialogCanDismiss"
-    (authenticated)="onAuthenticated($event)">
+    (authenticated)="onAuthenticated($event)"
+    (backToHub)="exitToHub.emit()"
+    (emergencyReset)="emergencyReset.emit()">
   </sutram-auth-dialog>
 
   </ng-container>
@@ -1518,6 +1520,22 @@
             [loading]="isLockAuthenticating"
             [label]="isLockAuthenticating ? 'Verifying...' : 'Unlock Project'">
           </button>
+
+          <!-- Escape & Reset Links -->
+          <div class="lock-footer-links">
+            <button
+              type="button"
+              class="lock-hub-link-btn"
+              (click)="onLockExitToHub()">
+              <i class="pi pi-arrow-left"></i> Back to Projects Hub
+            </button>
+            <button
+              type="button"
+              class="lock-reset-link-btn"
+              (click)="onLockEmergencyReset()">
+              <i class="pi pi-eraser"></i> Clear Cache & Reset
+            </button>
+          </div>
         </form>
       </div>
     </div>

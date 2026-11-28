@@ -4347,6 +4347,41 @@
     height: 38px;
     font-weight: 600;
   }
+
+  .lock-footer-links {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px dashed #e2e8f0;
+
+    .lock-hub-link-btn,
+    .lock-reset-link-btn {
+      background: none;
+      border: none;
+      padding: 0.25rem 0.4rem;
+      font-size: 0.78rem;
+      color: #64748b;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      transition: all 0.15s ease;
+
+      i {
+        font-size: 0.8rem;
+      }
+    }
+
+    .lock-hub-link-btn:hover {
+      color: #6366f1;
+    }
+
+    .lock-reset-link-btn:hover {
+      color: #ef4444;
+    }
+  }
 }
 
 .sutram-excel-container.dark-mode .project-lock-gate,
@@ -4393,6 +4428,23 @@
   .lock-field ::ng-deep .p-password-toggle-mask-icon,
   .lock-field .p-input-icon-left > i {
     color: var(--erp-text-muted, #94a3b8) !important;
+  }
+
+  .lock-footer-links {
+    border-top-color: var(--erp-surface-border, #334155) !important;
+
+    .lock-hub-link-btn,
+    .lock-reset-link-btn {
+      color: #94a3b8 !important;
+    }
+
+    .lock-hub-link-btn:hover {
+      color: #818cf8 !important;
+    }
+
+    .lock-reset-link-btn:hover {
+      color: #f87171 !important;
+    }
   }
 }
 

@@ -11,6 +11,7 @@ export class MasterLoginComponent {
   @Input() isDarkMode: boolean = false;
   @Output() loginSuccess = new EventEmitter<MasterUser>();
   @Output() toggleTheme = new EventEmitter<void>();
+  @Output() emergencyReset = new EventEmitter<void>();
 
   public username: string = '';
   public password: string = '';
@@ -21,6 +22,10 @@ export class MasterLoginComponent {
     private projectContext: ProjectContextService,
     private cdr: ChangeDetectorRef
   ) {}
+
+  public onEmergencyReset(): void {
+    this.emergencyReset.emit();
+  }
 
   public onLogin(): void {
     if (!this.username?.trim()) {

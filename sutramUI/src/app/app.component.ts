@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, ChangeDetectorRef, ViewChild } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef, ViewChild, HostListener } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Subscription } from 'rxjs';
 import { SutramExcelStudioComponent } from '../ng-sutramui-excel/lib/components/sutram-excel-studio/sutram-excel-studio.component';
@@ -15,6 +15,7 @@ export class AppComponent implements OnInit, OnDestroy {
   public selectedTable: string = '';
   public tablesList: Array<{ name: string; display: string }> = [];
   public isServerOnline: boolean = false;
+  public serverPort: number = 3300;
   public isDarkMode: boolean = false;
   public showingHub: boolean = false;
   public isStudioMounted: boolean = false;
@@ -22,7 +23,31 @@ export class AppComponent implements OnInit, OnDestroy {
   public showProjectUsersModal: boolean = false;
   public showLanModal: boolean = false;
   public showUpdateModal: boolean = false;
+  public showResetConfirmModal: boolean = false;
   private subs: Subscription[] = [];
+
+  @HostListener('window:keydown', ['$event'])
+  public handleGlobalKeydown(event: KeyboardEvent): void {
+    // Omnipresent Emergency Reset Hotkey: Ctrl+Alt+R or Cmd+Alt+R, or Ctrl+Shift+R
+    if (
+      (event.ctrlKey || event.metaKey) &&
+      (event.altKey || event.shiftKey) &&
+      (event.key === 'r' || event.key === 'R')
+    ) {
+      event.preventDefault();
+      this.onPromptEmergencyReset();
+    }
+  }
+
+  public onPromptEmergencyReset(): void {
+    this.showResetConfirmModal = true;
+    this.cdr.markForCheck();
+  }
+
+  public onConfirmEmergencyReset(): void {
+    this.showResetConfirmModal = false;
+    this.projectContext.emergencyResetAppState(true);
+  }
 
   public onOpenProjectUsersModal(): void {
     this.showProjectUsersModal = true;
@@ -215,9 +240,12 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   public checkServerHealth(): void {
-    this.http.get<{ status: string }>('/api/health').subscribe({
+    this.http.get<{ status: string; port?: number }>('/api/health').subscribe({
       next: (res) => {
         this.isServerOnline = res?.status === 'online';
+        if (res?.port) {
+          this.serverPort = res.port;
+        }
         this.cdr.markForCheck();
       },
       error: (err) => {

@@ -88,9 +88,53 @@
   }
 }
 
+.auth-footer-emergency {
+  margin-top: 0.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px dashed var(--erp-border, #e2e8f0);
+  text-align: center;
+
+  .emergency-link-btn {
+    background: none;
+    border: none;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.76rem;
+    color: var(--erp-text-muted, #64748b);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    transition: color 0.15s ease;
+
+    i {
+      font-size: 0.75rem;
+      color: #eab308;
+    }
+
+    &:hover {
+      color: #ef4444;
+      u {
+        color: #ef4444;
+      }
+    }
+  }
+}
+
 // ── Dynamic Theme & Dark Mode Protection (Zero White Controls - Rule 21) ──
 ::ng-deep body.dark-mode {
   .sutram-auth-dialog {
+    .auth-footer-emergency {
+      border-top-color: var(--erp-surface-border, #334155);
+      .emergency-link-btn {
+        color: #94a3b8;
+        &:hover {
+          color: #f87171;
+          u {
+            color: #f87171;
+          }
+        }
+      }
+    }
     .p-dialog-header,
     .p-dialog-content,
     .p-dialog-footer {

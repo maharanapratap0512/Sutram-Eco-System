@@ -1,14 +1,14 @@
 <p-dialog
   [(visible)]="visible"
   [modal]="true"
-  [closable]="canDismiss"
-  [dismissableMask]="canDismiss"
+  [closable]="true"
+  [dismissableMask]="false"
   [draggable]="false"
   [resizable]="false"
   [style]="{ width: '92vw', maxWidth: '420px' }"
   styleClass="sutram-auth-dialog"
   [header]="title"
-  (onHide)="close()">
+  (onHide)="onDialogHide()">
 
   <div class="auth-dialog-body">
     <!-- Error Alert Box -->
@@ -51,6 +51,7 @@
       </div>
 
       <div class="auth-actions">
+        <!-- If canDismiss is allowed, simple cancel -->
         <button
           *ngIf="canDismiss"
           pButton
@@ -59,6 +60,18 @@
           label="Cancel"
           (click)="close()">
         </button>
+
+        <!-- If canDismiss is false, NEVER trap the user: provide clean Escape to Hub -->
+        <button
+          *ngIf="!canDismiss"
+          pButton
+          type="button"
+          class="p-button-text p-button-secondary p-button-sm"
+          icon="pi pi-arrow-left"
+          label="Back to Hub"
+          (click)="onBackToHubClick()">
+        </button>
+
         <button
           pButton
           type="submit"
@@ -69,5 +82,12 @@
         </button>
       </div>
     </form>
+
+    <!-- Emergency Escape & Reset Link -->
+    <div class="auth-footer-emergency">
+      <button type="button" class="emergency-link-btn" (click)="onEmergencyResetClick()">
+        <i class="pi pi-eraser"></i> Stuck or encountering an issue? <u>Clear Cache & Reset</u>
+      </button>
+    </div>
   </div>
 </p-dialog>

@@ -26,6 +26,9 @@ export class SutramAuthDialogComponent {
 
   @Output() visibleChange = new EventEmitter<boolean>();
   @Output() authenticated = new EventEmitter<{ user: any; rights: any[]; token?: string }>();
+  @Output() cancel = new EventEmitter<void>();
+  @Output() backToHub = new EventEmitter<void>();
+  @Output() emergencyReset = new EventEmitter<void>();
 
   public username: string = '';
   public password: string = '';
@@ -38,11 +41,35 @@ export class SutramAuthDialogComponent {
   ) {}
 
   public close(): void {
-    if (!this.canDismiss) return;
+    if (!this.canDismiss) {
+      this.onBackToHubClick();
+      return;
+    }
     this.visible = false;
     this.visibleChange.emit(false);
     this.errorMessage = '';
     this.password = '';
+    this.cancel.emit();
+  }
+
+  public onDialogHide(): void {
+    if (!this.canDismiss) {
+      this.onBackToHubClick();
+    } else {
+      this.close();
+    }
+  }
+
+  public onBackToHubClick(): void {
+    this.visible = false;
+    this.visibleChange.emit(false);
+    this.errorMessage = '';
+    this.password = '';
+    this.backToHub.emit();
+  }
+
+  public onEmergencyResetClick(): void {
+    this.emergencyReset.emit();
   }
 
   public onSubmit(): void {

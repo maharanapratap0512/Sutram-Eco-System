@@ -149,6 +149,15 @@
       font-size: 0.82rem;
       border-radius: 20px;
     }
+
+    .reset-hub-btn {
+      color: #eab308 !important;
+
+      &:hover {
+        background: rgba(234, 179, 8, 0.12) !important;
+        color: #ca8a04 !important;
+      }
+    }
   }
 }
 

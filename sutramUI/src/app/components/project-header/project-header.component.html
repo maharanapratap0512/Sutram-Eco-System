@@ -39,9 +39,9 @@
 
   <div class="header-right">
     <!-- Live Server Connection Status -->
-    <div class="status-indicator" [title]="isServerOnline ? 'Connected to sutramServer' : 'Server is offline'">
+    <div class="status-indicator" [title]="isServerOnline ? ('Connected to sutramServer on port ' + serverPort + ' (http://localhost:' + serverPort + ')') : 'Server is offline'">
       <span class="status-dot" [class.dot-online]="isServerOnline" [class.dot-offline]="!isServerOnline"></span>
-      <span class="status-text">{{ isServerOnline ? 'Online' : 'Offline' }}</span>
+      <span class="status-text">{{ isServerOnline ? ('Online :' + serverPort) : 'Offline' }}</span>
     </div>
 
     <!-- LAN Network Explorer Button -->
@@ -65,6 +65,16 @@
       (click)="openUpdateModal.emit()"
       icon="pi pi-sync"
       title="Sutram Updater">
+    </button>
+
+    <!-- Emergency App Reset Button (Eraser Icon) -->
+    <button
+      pButton
+      type="button"
+      class="p-button-sm p-button-rounded p-button-text p-button-warning reset-header-btn"
+      (click)="emergencyReset.emit()"
+      icon="pi pi-eraser"
+      title="Clear Cache & Emergency Reset App State (Ctrl+Alt+R)">
     </button>
 
     <!-- Active User Profile Pill -->

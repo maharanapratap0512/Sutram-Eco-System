@@ -22,9 +22,9 @@
 
     <div class="header-right">
       <!-- Live Server Connection Status -->
-      <div class="status-indicator" [title]="isServerOnline ? 'Connected to sutramServer (Port 3300)' : 'sutramServer is offline'">
+      <div class="status-indicator" [title]="isServerOnline ? ('Connected to sutramServer on port ' + serverPort + ' (http://localhost:' + serverPort + ')') : 'sutramServer is offline'">
         <span class="status-dot" [class.dot-online]="isServerOnline" [class.dot-offline]="!isServerOnline"></span>
-        <span class="status-text">{{ isServerOnline ? 'Server Online' : 'Server Offline' }}</span>
+        <span class="status-text">{{ isServerOnline ? ('Server Online :' + serverPort) : 'Server Offline' }}</span>
       </div>
 
       <!-- Active Master User Profile Pill -->
@@ -37,7 +37,7 @@
         <p-tag [value]="(activeMasterUser?.role || 'admin') | uppercase" [severity]="activeMasterUser?.role === 'superadmin' ? 'danger' : 'info'"></p-tag>
       </div>
 
-      <!-- Refresh Projects Button -->
+      <!-- Refresh Projects Button (Circular Sync) -->
       <button
         pButton
         type="button"
@@ -45,6 +45,16 @@
         (click)="loadProjects()"
         [icon]="isLoading ? 'pi pi-spin pi-spinner' : 'pi pi-refresh'"
         title="Refresh Projects List">
+      </button>
+
+      <!-- Emergency App Reset Button (Eraser Icon) -->
+      <button
+        pButton
+        type="button"
+        class="p-button-sm p-button-rounded p-button-text p-button-warning reset-hub-btn"
+        (click)="emergencyReset.emit()"
+        icon="pi pi-eraser"
+        title="Clear Cache & Emergency Reset App State (Ctrl+Alt+R)">
       </button>
 
       <!-- Theme Switcher -->

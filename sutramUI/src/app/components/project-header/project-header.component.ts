@@ -13,6 +13,7 @@ export class ProjectHeaderComponent {
   @Input() activeProject: ProjectItem | null = null;
   @Input() showingHub: boolean = false;
   @Input() isServerOnline: boolean = true;
+  @Input() serverPort: number = 3300;
   @Input() isDarkMode: boolean = false;
 
   @Output() selectProject = new EventEmitter<ProjectItem>();
@@ -22,6 +23,7 @@ export class ProjectHeaderComponent {
   @Output() logout = new EventEmitter<void>();
   @Output() openLanModal = new EventEmitter<void>();
   @Output() openUpdateModal = new EventEmitter<void>();
+  @Output() emergencyReset = new EventEmitter<void>();
 
   constructor(
     public projectContext: ProjectContextService,

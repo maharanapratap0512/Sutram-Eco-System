@@ -25,11 +25,13 @@ export interface NetworkProjectItem {
 export class ProjectHubComponent implements OnInit, OnDestroy {
   @Input() isDarkMode: boolean = false;
   @Input() isServerOnline: boolean = true;
+  @Input() serverPort: number = 3300;
   @Output() openProject = new EventEmitter<ProjectItem>();
   @Output() toggleTheme = new EventEmitter<void>();
   @Output() logout = new EventEmitter<void>();
   @Output() openLanModal = new EventEmitter<void>();
   @Output() openUpdateModal = new EventEmitter<void>();
+  @Output() emergencyReset = new EventEmitter<void>();
 
   public projects: ProjectItem[] = [];
   public searchQuery: string = '';
